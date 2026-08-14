@@ -1,1 +1,9 @@
 artifacts/
+data/work/
+.env
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+data/demo_sources/_index.json

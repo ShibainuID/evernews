@@ -1,0 +1,24 @@
+name: datsci
+channels:
+  - defaults
+  - conda-forge
+dependencies:
+  - python>=3.11
+  - fastapi
+  - uvicorn
+  - pydantic>=2
+  - pydantic-settings
+  - httpx
+  - python-multipart
+  - pytest
+  - pytest-asyncio
+  - ruff
+  - mypy
+  - pip:
+      # PyPI-only: not available as conda packages / newer than conda versions.
+      # ponytail: pin minimal — only paddlepaddle (PaddleOCR 3.x requires >=3.0)
+      # and paddleocr are pinned; others unpinned, pin only if conda solve fails.
+      - paddlepaddle==3.2.0
+      - paddleocr>=3,<4
+      - faster-whisper
+      - google-cloud-vision
