@@ -44,6 +44,9 @@ class VerificationState:
     progress: float = 0.0
     error: str | None = None
     result: VerificationResult | None = None
+    # T36 debug payloads: JSON-safe dumps, None until their stage produced them
+    plan: dict[str, Any] | None = None
+    bundle: dict[str, Any] | None = None
 
 
 class VerificationStateStore:

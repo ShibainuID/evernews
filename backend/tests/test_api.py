@@ -222,8 +222,10 @@ def test_debug_returns_artifacts_and_result_summaries(app, video: Path):
     assert body["context"] is not None
     assert body["context"]["event"]["value"] == "flood"
     assert body["comparison"] is not None
-    assert body["plan"] is None
-    assert body["bundle"] is None
+    assert body["plan"] is not None
+    assert body["plan"]["verification_id"] == ver_id
+    assert body["bundle"] is not None
+    assert body["bundle"]["verification_id"] == ver_id
 
 
 def test_debug_disabled_outside_development(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):

@@ -185,6 +185,6 @@ def get_debug(ver_id: str, request: Request) -> dict:
         "artifacts": artifacts,
         "context": result.current_context.model_dump() if result is not None else None,
         "comparison": result.comparison.model_dump() if result is not None else None,
-        "plan": None,  # ponytail: T35 does not persist plan/bundle; report unavailable
-        "bundle": None,
+        "plan": state.plan,
+        "bundle": state.bundle,
     }

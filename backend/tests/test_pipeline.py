@@ -647,7 +647,7 @@ async def test_state_tracks_stages_progress_and_completed(monkeypatch: pytest.Mo
         ver_id, pipeline.VerificationRequest(video_path=video), _case_a(ver_id), settings=settings
     )
 
-    stages = [update["stage"] for update in recording.updates]
+    stages = [update["stage"] for update in recording.updates if "stage" in update]
     assert stages == [
         "preprocessing",
         "extracting_context",
@@ -659,7 +659,9 @@ async def test_state_tracks_stages_progress_and_completed(monkeypatch: pytest.Mo
         "comparing_context",
         "completed",
     ]
-    progress = [update["progress"] for update in recording.updates]
+    progress = [
+        update["progress"] for update in recording.updates if "progress" in update
+    ]
     assert progress == sorted(progress) and len(set(progress)) == len(progress), "progress must be strictly increasing"
 
     final = recording.get(ver_id)
@@ -669,6 +671,10 @@ async def test_state_tracks_stages_progress_and_completed(monkeypatch: pytest.Mo
     assert final.progress == 1.0
     assert final.error is None
     assert final.result is result
+
+    # T36 debug payloads: plan/bundle persisted as JSON-safe dumps keyed by id
+    assert final.plan is not None and final.plan["verification_id"] == ver_id
+    assert final.bundle is not None and final.bundle["verification_id"] == ver_id
 
 
 # --- error matrix (HANDOFF §26) ---

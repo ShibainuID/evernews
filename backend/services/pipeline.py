@@ -279,6 +279,7 @@ async def run_verification(
         # ----- planning (T31) -----
         _enter(ver_id, "planning_investigation")
         plan = await planner.create_plan(context, providers.luna, settings)
+        state_module.store.update(ver_id, plan=plan.model_dump(mode="json"))
 
         # ----- validation branches (T32; the three run concurrently inside) -----
         # ponytail: branch stages are entered sequentially and the last write
@@ -294,6 +295,7 @@ async def run_verification(
             run_visual=_visual_runner(providers, keyframe_refs),
             demo_index=providers.demo_index,
         )
+        state_module.store.update(ver_id, bundle=bundle.model_dump(mode="json"))
         if bundle.errors:
             context.unresolved.extend(dict.fromkeys(bundle.errors))  # §26: branch errors recorded
         if _web_research_incomplete(bundle):
