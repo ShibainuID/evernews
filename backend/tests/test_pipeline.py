@@ -620,6 +620,9 @@ async def test_case_d_golden_insufficient_evidence_never_false_context(settings:
     assert result.visual_match == "unknown"
     assert result.sources == []
     assert result.strongest_evidence_ids == []
+    assert not any("web_research incomplete" in note for note in result.unresolved), (
+        "a normal no-result web branch must not carry the failure marker"
+    )
     for dim in (result.comparison.event, result.comparison.location, result.comparison.date):
         assert dim.status is ComparisonStatus.UNKNOWN
     assert_evidence_invariants(result)
@@ -787,6 +790,9 @@ async def test_investigator_timeout_marks_web_branch_incomplete(settings: Any, v
 
     assert isinstance(result, VerificationResult)
     assert any("web research" in note.lower() for note in result.unresolved), "incomplete web branch must be surfaced"
+    assert any("web_research incomplete" in note for note in result.unresolved), (
+        "failed/timed-out web research must carry the explicit incomplete marker"
+    )
     assert all(source.origin != "web_research" for source in result.sources), "no invented web sources"
     assert_evidence_invariants(result)
 

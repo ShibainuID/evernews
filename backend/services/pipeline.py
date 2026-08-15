@@ -41,7 +41,7 @@ from backend.providers.base import (
 )
 from backend.schemas.context import OCRHit, SpeechExtraction, VisualObservation
 from backend.schemas.evidence import KeyframeRef
-from backend.schemas.investigation import VisualSearchTask, VisualWebCandidate
+from backend.schemas.investigation import RawValidationBundle, VisualSearchTask, VisualWebCandidate
 from backend.schemas.result import VerificationResult
 from backend.services.context import context_fuser, visual_extractor
 from backend.services.evidence import comparator, normalizer, source_ranker, synthesizer
@@ -195,6 +195,22 @@ async def _default_fetcher(url: str) -> SafeFetchResult:
 # --- state helpers ---
 
 
+def _web_research_incomplete(bundle: RawValidationBundle) -> bool:
+    """Deterministic failed/timeout web-branch detection (F35-1).
+
+    T32/T29 encode a failed or timed-out web task as a schema-valid
+    ``status="insufficient"`` ``WebResearchResult`` carrying unresolved error
+    notes, and mark the branch ``error``/``partial_failure`` — while a
+    legitimate no-result finding stays ``insufficient`` with no notes.
+    """
+    if bundle.branch_status.get("web_research") in ("error", "partial_failure"):
+        return True
+    return any(
+        result.status == "insufficient" and bool(result.unresolved)
+        for result in bundle.web_research
+    )
+
+
 def _enter(ver_id: str, stage: str) -> None:
     state_module.store.update(ver_id, stage=stage, progress=_STAGE_PROGRESS[stage])
 
@@ -280,6 +296,8 @@ async def run_verification(
         )
         if bundle.errors:
             context.unresolved.extend(dict.fromkeys(bundle.errors))  # §26: branch errors recorded
+        if _web_research_incomplete(bundle):
+            context.unresolved.append("web_research incomplete")  # F35-1: explicit gap marker
 
         # ----- synthesis (T13/T14/T33) -----
         _enter(ver_id, "synthesizing_evidence")
