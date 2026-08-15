@@ -2,9 +2,10 @@
 
 Small exact rules on top of the T08/T09 dictionaries. UNKNOWN propagates when a
 side is missing or a value does not resolve and never becomes MISMATCH. A
-``semantic_equiv`` fallback resolves only pairs the tiny deterministic
-dictionaries cannot resolve (relation MISMATCH); it is never consulted for
-exact/synonym/parent-child matches or when either side is missing.
+``semantic_equiv`` fallback resolves only MISMATCH pairs the tiny deterministic
+dictionaries do not know (at least one side is not a recognized dictionary
+entry); a known deterministic mismatch where both sides are recognized, and
+exact/synonym/parent-child matches, never consult it, nor does a missing side.
 """
 
 from collections.abc import Callable
@@ -13,7 +14,15 @@ from datetime import date
 from backend.schemas.context import VideoContext
 from backend.schemas.evidence import ComparisonStatus, ContextClaim
 from backend.schemas.result import ContextComparison, DimensionComparison, SourceContext
-from backend.utils.text import LocationRelation, events_relation, location_relation
+from backend.utils.text import (
+    LocationRelation,
+    _EVENT_CANONICAL,
+    _LOCATION_ALIASES,
+    _LOCATION_PARENTS,
+    events_relation,
+    location_relation,
+    normalize_event,
+)
 
 _NO_SOURCE = "No reliable source found to compare against."
 
@@ -34,28 +43,49 @@ def _resolve_date(value: str | None) -> date | None:
         return None
 
 
+def _event_known(value: str) -> bool:
+    """True when the event dictionary recognizes the value (canonical or synonym)."""
+    return normalize_event(value) in _EVENT_CANONICAL
+
+
+def _location_known(value: str) -> bool:
+    """True when the location dictionary recognizes the value (alias or city key).
+
+    Uses the same keying as ``backend.utils.text._key`` without importing the
+    private helper: lowercase, comma-split to the core city, alias-resolved.
+    """
+    core = value.strip().lower().split(",")[0]
+    resolved = _LOCATION_ALIASES.get(core, core)
+    return core in _LOCATION_ALIASES or resolved in _LOCATION_PARENTS
+
+
 def _pair_status(
     cur: str | None,
     src: str | None,
     relation: LocationRelation,
     semantic_equiv: Callable[[str, str], bool | None] | None,
+    recognized: Callable[[str], bool],
 ) -> tuple[ComparisonStatus, float]:
     """Status+confidence for one event/location pair (HANDOFF §17.1, §17.3).
 
     The mismatch guard lives here: either side missing -> UNKNOWN, so a pair
-    can never be judged a mismatch without both values populated.
+    can never be judged a mismatch without both values populated. The semantic
+    fallback only resolves pairs the deterministic dictionaries do not know: a
+    MISMATCH pair where at least one value is unrecognized. A known
+    deterministic mismatch (both sides recognized) returns MISMATCH directly
+    and never consults the fallback (F15-1).
     """
     if cur is None or src is None:
         return ComparisonStatus.UNKNOWN, 0.0
     if relation is LocationRelation.MISMATCH:
-        if semantic_equiv is None:
-            return ComparisonStatus.MISMATCH, 1.0
-        result = semantic_equiv(cur, src)
-        if result is True:
-            return ComparisonStatus.CONSISTENT, 1.0
-        if result is False:
-            return ComparisonStatus.MISMATCH, 1.0
-        return ComparisonStatus.UNKNOWN, 0.0
+        if semantic_equiv is not None and not (recognized(cur) and recognized(src)):
+            result = semantic_equiv(cur, src)
+            if result is True:
+                return ComparisonStatus.CONSISTENT, 1.0
+            if result is False:
+                return ComparisonStatus.MISMATCH, 1.0
+            return ComparisonStatus.UNKNOWN, 0.0
+        return ComparisonStatus.MISMATCH, 1.0
     return ComparisonStatus.CONSISTENT, 1.0
 
 
@@ -136,12 +166,14 @@ def compare(
 
     cur_event = _claim_value(current.event)
     event_rel = events_relation(cur_event, source.event)
-    event_status, event_conf = _pair_status(cur_event, source.event, event_rel, semantic_equiv)
+    event_status, event_conf = _pair_status(
+        cur_event, source.event, event_rel, semantic_equiv, _event_known
+    )
 
     cur_location = _claim_value(current.location)
     location_rel = location_relation(cur_location, source.location)
     location_status, location_conf = _pair_status(
-        cur_location, source.location, location_rel, semantic_equiv
+        cur_location, source.location, location_rel, semantic_equiv, _location_known
     )
 
     cur_date = _claim_value(current.time)

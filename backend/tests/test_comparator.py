@@ -226,6 +226,36 @@ def test_semantic_fallback_not_called_for_parent_child():
     assert result.location.status is ComparisonStatus.CONSISTENT
 
 
+def test_semantic_fallback_not_called_for_known_location_mismatch():
+    # Jakarta and Bangkok are both recognized dictionary entries: the
+    # mismatch is deterministic and must never consult the fallback (F15-1).
+    context = build_video_context("ver_f10")  # location normalized "Jakarta, Indonesia"
+    result = compare(
+        context,
+        build_source_context(location="Bangkok", date=None),
+        semantic_equiv=_failing_fallback,
+    )
+    assert result.location.status is ComparisonStatus.MISMATCH
+    assert result.location.confidence == 1.0
+
+
+def test_semantic_fallback_called_for_unrecognized_location_pair():
+    # "Bandung" is not a dictionary entry: the pair is unresolved, so the
+    # fallback is consulted and its True maps to CONSISTENT.
+    context = build_video_context(
+        "ver_f11",
+        location=build_claim("Bandung", None, 0.9, ["speech_02"]),
+    )
+    calls = []
+    result = compare(
+        context,
+        build_source_context(location="Bangkok", date=None),
+        semantic_equiv=_recording_fallback(calls, True),
+    )
+    assert calls == [("Bandung", "Bangkok")]
+    assert result.location.status is ComparisonStatus.CONSISTENT
+
+
 def test_semantic_fallback_not_called_when_side_missing():
     context = build_video_context("ver_f6", location=_claim_none(["speech_02"]))
     result = compare(
