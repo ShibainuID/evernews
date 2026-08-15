@@ -41,6 +41,18 @@ _SENSITIVE_KEY_PARTS = (
 # Secret-shaped tokens inside otherwise-untrusted text (provider errors).
 _SECRET_TOKEN = re.compile(r"sk-[A-Za-z0-9_-]{8,}|Bearer\s+[A-Za-z0-9._~+/=-]{6,}|AKIA[0-9A-Z]{16}")
 
+# Sensitive key/value pairs inside otherwise-untrusted text (F37-1): a
+# sensitive key (case-insensitive; `_`/`-`/nothing separated, so compound
+# keys like ``auth_token=`` are covered via the lookbehind) followed by
+# ``=`` or ``:`` and a bounded non-whitespace value; surrounding text is
+# preserved. Applied after token redaction so ``Authorization: Bearer xyz``
+# is fully covered either way.
+_KEY_VALUE_SECRET = re.compile(
+    r"(?<![A-Za-z0-9])(?:api[_-]?key|password|passwd|token|secret|authorization|credential)"
+    r"\s*[=:]\s*[^\s,;&\"'<>]+",
+    re.IGNORECASE,
+)
+
 _REDACTED = "<redacted>"
 
 _verification_id: contextvars.ContextVar[str | None] = contextvars.ContextVar(
@@ -49,7 +61,8 @@ _verification_id: contextvars.ContextVar[str | None] = contextvars.ContextVar(
 
 
 def _redact_text(value: str) -> str:
-    return _SECRET_TOKEN.sub(_REDACTED, value)
+    value = _SECRET_TOKEN.sub(_REDACTED, value)
+    return _KEY_VALUE_SECRET.sub(_REDACTED, value)
 
 
 def _jsonable(key: str, value: Any) -> Any:

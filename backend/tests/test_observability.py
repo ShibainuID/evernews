@@ -150,6 +150,61 @@ def test_log_event_redacts_secret_shaped_text(caplog: pytest.LogCaptureFixture):
     assert "provider died" in text  # surrounding message survives
 
 
+def test_log_event_redacts_key_value_secrets_in_text(caplog: pytest.LogCaptureFixture):
+    """F37-1: key=value secrets inside untrusted text (e.g. error strings) never leak."""
+    caplog.set_level(logging.INFO)
+    log_event(
+        "ver_1",
+        "failed",
+        "pipeline",
+        1.0,
+        "error",
+        error="provider rejected: password=hunter2 and api_key=plain-secret and Authorization: abcdef",
+    )
+
+    text = caplog.text
+    for secret in ("hunter2", "plain-secret", "abcdef"):
+        assert secret not in text
+    assert "provider rejected" in text  # surrounding text survives
+    assert "<redacted>" in text
+
+
+def test_log_event_redacts_query_style_values(caplog: pytest.LogCaptureFixture):
+    """F37-1: URL query secrets (?token=...&api_key=...) never leak."""
+    caplog.set_level(logging.INFO)
+    log_event(
+        "ver_1",
+        "failed",
+        "pipeline",
+        1.0,
+        "error",
+        error="fetch failed for https://example.com/v1/verify?token=QUERYTOKEN123&api_key=SECRETKEY456",
+    )
+
+    text = caplog.text
+    assert "QUERYTOKEN123" not in text
+    assert "SECRETKEY456" not in text
+    assert "https://example.com/v1/verify" in text  # safe URL prefix survives
+
+
+def test_log_event_redacts_key_value_secrets_case_insensitively(caplog: pytest.LogCaptureFixture):
+    """F37-1: case-insensitive keys and _/-joined compound keys are covered."""
+    caplog.set_level(logging.INFO)
+    log_event(
+        "ver_1",
+        "failed",
+        "pipeline",
+        1.0,
+        "error",
+        error="PASSWORD=hunter2, Api-Key: mixedcase123, auth_token=ABC123XYZ, access_secret=DEF456UVW",
+    )
+
+    text = caplog.text
+    for secret in ("hunter2", "mixedcase123", "ABC123XYZ", "DEF456UVW"):
+        assert secret not in text
+    assert "<redacted>" in text
+
+
 def test_verification_scope_injects_id_into_plain_records(caplog: pytest.LogCaptureFixture):
     caplog.set_level(logging.INFO)
     logger = logging.getLogger("backend.services.pipeline")
