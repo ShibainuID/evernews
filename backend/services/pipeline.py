@@ -25,6 +25,7 @@ verification, never a fabricated result.
 
 import asyncio
 import multiprocessing
+import time
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -50,6 +51,7 @@ from backend.services.result import result_builder
 from backend.services.validation import orchestrator, planner
 from backend.state import STATUS_COMPLETED, STATUS_FAILED
 from backend.utils.fetch import SafeFetchResult
+from backend.utils.observability import log_event, verification_scope
 
 # Heavy-provider child budgets (HANDOFF §11.2 spirit). Module-level so tests
 # can shorten them.
@@ -164,13 +166,17 @@ def _run_child(worker: Callable[..., Any], args: tuple[Any, ...], timeout_sec: f
 
 async def _extract_speech(providers: Providers, audio_path: str) -> SpeechExtraction:
     if providers.isolated:
-        return await asyncio.to_thread(_run_child, _speech_worker, (providers.speech, audio_path), SPEECH_TIMEOUT_SEC)
+        return await asyncio.to_thread(
+            _run_child, _speech_worker, (providers.speech, audio_path), SPEECH_TIMEOUT_SEC
+        )
     return await providers.speech.transcribe(audio_path)
 
 
 async def _extract_ocr(providers: Providers, frame_paths: list[str]) -> list[OCRHit]:
     if providers.isolated:
-        return await asyncio.to_thread(_run_child, _ocr_worker, (providers.ocr, frame_paths), OCR_TIMEOUT_SEC)
+        return await asyncio.to_thread(
+            _run_child, _ocr_worker, (providers.ocr, frame_paths), OCR_TIMEOUT_SEC
+        )
     return providers.ocr.extract(frame_paths)
 
 
@@ -217,8 +223,17 @@ def _enter(ver_id: str, stage: str) -> None:
 
 def _fail(ver_id: str, error: str) -> None:
     state_module.store.update(
-        ver_id, status=STATUS_FAILED, stage="failed", progress=_STAGE_PROGRESS["failed"], error=error
+        ver_id,
+        status=STATUS_FAILED,
+        stage="failed",
+        progress=_STAGE_PROGRESS["failed"],
+        error=error,
     )
+
+
+def _elapsed_ms(t0: float) -> float:
+    """Wall-clock stage duration in ms (deterministic, clamped by log_event)."""
+    return round((time.perf_counter() - t0) * 1000, 3)
 
 
 # --- the pipeline (HANDOFF §38) ---
@@ -239,93 +254,202 @@ async def run_verification(
     state_module.store.create(ver_id)
     now = date.today()
     unresolved_notes: list[str] = []
-    try:
-        # ----- Part 1: preprocessing (T19) + keyframes (T20) -----
-        _enter(ver_id, "preprocessing")
-        artifacts = ffmpeg.preprocess(ver_id, request.video_path, settings)
-        keyframe_refs = keyframes.select_keyframes(artifacts.normalized_path, ver_id, settings)
-
-        # ----- context extraction (T24/T25/T22/T23): heavy providers isolated -----
-        _enter(ver_id, "extracting_context")
+    _t0 = time.perf_counter()  # earliest bound; every stage rebinds it before its work
+    with verification_scope(ver_id):  # T37: all backend logs in this task carry the id
         try:
-            speech = await _extract_speech(providers, str(artifacts.audio_path))
+            # ----- Part 1: preprocessing (T19) + keyframes (T20) -----
+            _enter(ver_id, "preprocessing")
+            _t0 = time.perf_counter()
+            artifacts = ffmpeg.preprocess(ver_id, request.video_path, settings)
+            keyframe_refs = keyframes.select_keyframes(artifacts.normalized_path, ver_id, settings)
+            log_event(
+                ver_id,
+                "preprocessing",
+                "ffmpeg",
+                _elapsed_ms(_t0),
+                "success",
+                keyframes=len(keyframe_refs),
+            )
+
+            # ----- context extraction (T24/T25/T22/T23): heavy providers isolated -----
+            _enter(ver_id, "extracting_context")
+            try:
+                _t0 = time.perf_counter()
+                speech = await _extract_speech(providers, str(artifacts.audio_path))
+                log_event(
+                    ver_id,
+                    "extracting_context",
+                    "speech",
+                    _elapsed_ms(_t0),
+                    "success",
+                    segments=len(speech.segments),
+                )
+            except Exception as exc:
+                speech = SpeechExtraction()  # §26: whisper failure -> empty speech, continue
+                unresolved_notes.append(f"speech extraction failed: {exc}")
+                log_event(
+                    ver_id, "extracting_context", "speech", _elapsed_ms(_t0), "error", degraded=True
+                )
+            try:
+                _t0 = time.perf_counter()
+                ocr = await _extract_ocr(providers, [ref.local_path for ref in keyframe_refs])
+                log_event(
+                    ver_id,
+                    "extracting_context",
+                    "ocr",
+                    _elapsed_ms(_t0),
+                    "success",
+                    hits=len(ocr),
+                )
+            except Exception as exc:
+                ocr = []  # §26: OCR failure -> no text, continue
+                unresolved_notes.append(f"OCR extraction failed: {exc}")
+                log_event(
+                    ver_id, "extracting_context", "ocr", _elapsed_ms(_t0), "error", degraded=True
+                )
+            try:
+                _t0 = time.perf_counter()
+                visual = await visual_extractor.extract(keyframe_refs, providers.luna)
+                log_event(
+                    ver_id,
+                    "extracting_context",
+                    "visual",
+                    _elapsed_ms(_t0),
+                    "success",
+                    frames=len(visual.evidence_frames),
+                )
+            except Exception as exc:
+                visual = VisualObservation()  # every keyframe failed: evidence gap, continue
+                unresolved_notes.append(f"visual extraction failed: {exc}")
+                log_event(
+                    ver_id, "extracting_context", "visual", _elapsed_ms(_t0), "error", degraded=True
+                )
+
+            context = await context_fuser.fuse(
+                ver_id,
+                request.caption,
+                speech,
+                ocr,
+                visual,
+                keyframe_refs,
+                now,
+                luna_provider=providers.luna,
+            )
+            if unresolved_notes:
+                context.unresolved.extend(unresolved_notes)
+
+            # ----- planning (T31) -----
+            _enter(ver_id, "planning_investigation")
+            _t0 = time.perf_counter()
+            plan = await planner.create_plan(context, providers.luna, settings)
+            state_module.store.update(ver_id, plan=plan.model_dump(mode="json"))
+            log_event(
+                ver_id,
+                "planning_investigation",
+                "luna",
+                _elapsed_ms(_t0),
+                "success",
+                fact_check_tasks=len(plan.fact_check_tasks),
+                web_tasks=len(plan.web_research_tasks),
+                visual_tasks=len(plan.visual_search_tasks),
+            )
+
+            # ----- validation branches (T32; the three run concurrently inside) -----
+            # ponytail: branch stages are entered sequentially and the last write
+            # wins for pollers while T32's gather runs — the branches genuinely
+            # overlap, so a single stage can only approximate the phase.
+            for stage in ("fact_check_search", "web_research", "visual_source_search"):
+                _enter(ver_id, stage)
+            bundle = await orchestrator.execute(
+                context,
+                plan,
+                run_fact_check=providers.fact_check,
+                investigate=providers.web_research.investigate,
+                run_visual=_visual_runner(providers, keyframe_refs),
+                demo_index=providers.demo_index,
+            )
+            state_module.store.update(ver_id, bundle=bundle.model_dump(mode="json"))
+            if bundle.errors:
+                context.unresolved.extend(
+                    dict.fromkeys(bundle.errors)
+                )  # §26: branch errors recorded
+            if _web_research_incomplete(bundle):
+                context.unresolved.append("web_research incomplete")  # F35-1: explicit gap marker
+
+            # ----- synthesis (T13/T14/T33) -----
+            _enter(ver_id, "synthesizing_evidence")
+            _t0 = time.perf_counter()
+            candidates = await normalizer.build_source_candidates(
+                context, bundle, providers.page_fetcher or _default_fetcher
+            )
+            ranked = source_ranker.rank(candidates, now)
+            synthesis = await synthesizer.synthesize(
+                context, bundle, ranked, luna_provider=providers.luna
+            )
+            log_event(
+                ver_id,
+                "synthesizing_evidence",
+                "luna",
+                _elapsed_ms(_t0),
+                "success",
+                candidates=len(ranked),
+                selected_source_id=synthesis.best_visual_source_id or "none",
+            )
+
+            # ----- comparison + result (T15/T34) -----
+            _enter(ver_id, "comparing_context")
+            _t0 = time.perf_counter()
+            comparison = comparator.compare(context, synthesis.probable_source_context)
+            result = result_builder.build(context, synthesis, comparison, ranked)
+            log_event(
+                ver_id,
+                "comparing_context",
+                "comparator",
+                _elapsed_ms(_t0),
+                "success",
+                classification=result.classification,
+            )
+
+            state_module.store.update(
+                ver_id,
+                status=STATUS_COMPLETED,
+                stage="completed",
+                progress=_STAGE_PROGRESS["completed"],
+                error=None,
+                result=result,
+            )
+            log_event(
+                ver_id,
+                "completed",
+                "pipeline",
+                _elapsed_ms(_t0),
+                "success",
+                sources=len(result.sources),
+            )
+            return result
+        except ffmpeg.PreprocessingError as exc:
+            _fail(ver_id, f"{exc.code}: {exc}")  # e.g. "video_too_long: ..."
+            log_event(
+                ver_id,
+                "failed",
+                "pipeline",
+                _elapsed_ms(_t0),
+                "error",
+                error_stage="preprocessing",
+                error_code=exc.code,
+            )
+            raise
         except Exception as exc:
-            speech = SpeechExtraction()  # §26: whisper failure -> empty speech, continue
-            unresolved_notes.append(f"speech extraction failed: {exc}")
-        try:
-            ocr = await _extract_ocr(providers, [ref.local_path for ref in keyframe_refs])
-        except Exception as exc:
-            ocr = []  # §26: OCR failure -> no text, continue
-            unresolved_notes.append(f"OCR extraction failed: {exc}")
-        try:
-            visual = await visual_extractor.extract(keyframe_refs, providers.luna)
-        except Exception as exc:
-            visual = VisualObservation()  # every keyframe failed: evidence gap, continue
-            unresolved_notes.append(f"visual extraction failed: {exc}")
-
-        context = await context_fuser.fuse(
-            ver_id,
-            request.caption,
-            speech,
-            ocr,
-            visual,
-            keyframe_refs,
-            now,
-            luna_provider=providers.luna,
-        )
-        if unresolved_notes:
-            context.unresolved.extend(unresolved_notes)
-
-        # ----- planning (T31) -----
-        _enter(ver_id, "planning_investigation")
-        plan = await planner.create_plan(context, providers.luna, settings)
-        state_module.store.update(ver_id, plan=plan.model_dump(mode="json"))
-
-        # ----- validation branches (T32; the three run concurrently inside) -----
-        # ponytail: branch stages are entered sequentially and the last write
-        # wins for pollers while T32's gather runs — the branches genuinely
-        # overlap, so a single stage can only approximate the phase.
-        for stage in ("fact_check_search", "web_research", "visual_source_search"):
-            _enter(ver_id, stage)
-        bundle = await orchestrator.execute(
-            context,
-            plan,
-            run_fact_check=providers.fact_check,
-            investigate=providers.web_research.investigate,
-            run_visual=_visual_runner(providers, keyframe_refs),
-            demo_index=providers.demo_index,
-        )
-        state_module.store.update(ver_id, bundle=bundle.model_dump(mode="json"))
-        if bundle.errors:
-            context.unresolved.extend(dict.fromkeys(bundle.errors))  # §26: branch errors recorded
-        if _web_research_incomplete(bundle):
-            context.unresolved.append("web_research incomplete")  # F35-1: explicit gap marker
-
-        # ----- synthesis (T13/T14/T33) -----
-        _enter(ver_id, "synthesizing_evidence")
-        candidates = await normalizer.build_source_candidates(
-            context, bundle, providers.page_fetcher or _default_fetcher
-        )
-        ranked = source_ranker.rank(candidates, now)
-        synthesis = await synthesizer.synthesize(context, bundle, ranked, luna_provider=providers.luna)
-
-        # ----- comparison + result (T15/T34) -----
-        _enter(ver_id, "comparing_context")
-        comparison = comparator.compare(context, synthesis.probable_source_context)
-        result = result_builder.build(context, synthesis, comparison, ranked)
-
-        state_module.store.update(
-            ver_id,
-            status=STATUS_COMPLETED,
-            stage="completed",
-            progress=_STAGE_PROGRESS["completed"],
-            error=None,
-            result=result,
-        )
-        return result
-    except ffmpeg.PreprocessingError as exc:
-        _fail(ver_id, f"{exc.code}: {exc}")  # e.g. "video_too_long: ..."
-        raise
-    except Exception as exc:
-        _fail(ver_id, str(exc))
-        raise
+            failing_state = state_module.store.get(ver_id)
+            failing_stage = failing_state.stage if failing_state is not None else "unknown"
+            _fail(ver_id, str(exc))
+            log_event(
+                ver_id,
+                "failed",
+                "pipeline",
+                _elapsed_ms(_t0),
+                "error",
+                error_stage=failing_stage,
+                error=str(exc),  # text is redacted by log_event
+            )
+            raise

@@ -21,6 +21,7 @@ never touches concrete providers, ``Settings``, or the demo index file.
 """
 
 import asyncio
+import time
 from typing import Any, Awaitable, Callable, Sequence, cast
 
 from backend.schemas.context import VideoContext
@@ -35,6 +36,7 @@ from backend.schemas.investigation import (
     WebResearchTask,
 )
 from backend.schemas.result import SourceCandidate
+from backend.utils.observability import log_event
 
 # Branch budgets (HANDOFF §11.2). Module-level so tests can shorten them.
 FACT_CHECK_TIMEOUT_SEC = 15.0
@@ -72,15 +74,26 @@ def _insufficient_web(task: WebResearchTask, error: BaseException) -> WebResearc
 
 async def _run_group(
     runners: Sequence[tuple[Callable[..., Awaitable[Any]], Any]], timeout_sec: float
-) -> list[Any]:
-    """One outcome per (runner, task): the value or its exception — never raises."""
+) -> tuple[list[Any], float]:
+    """One outcome per (runner, task): the value or its exception — never raises.
+
+    Returns ``(outcomes, max_task_latency_ms)``: a group finishes when its
+    slowest task does, so the max task duration is the group's effective
+    wall-clock time (measured even on task failure).
+    """
+    durations: list[float] = []
 
     async def _bounded(runner, task):
-        return await asyncio.wait_for(runner(task), timeout=timeout_sec)
+        t0 = time.perf_counter()
+        try:
+            return await asyncio.wait_for(runner(task), timeout=timeout_sec)
+        finally:
+            durations.append((time.perf_counter() - t0) * 1000)
 
-    return await asyncio.gather(
+    outcomes = await asyncio.gather(
         *(_bounded(runner, task) for runner, task in runners), return_exceptions=True
     )
+    return outcomes, round(max(durations, default=0.0), 3)
 
 
 def _fact_normalize(outcomes: list[Any]) -> tuple[list[FactCheckEvidence], str, list[str]]:
@@ -239,8 +252,19 @@ async def execute(
             f"(plan carried {len(plan.web_research_tasks)})."
         )
 
-    fact_outcomes, web_outcomes, visual_outcomes = cast(
-        tuple[list[Any], list[Any], list[Any]],
+    (
+        (fact_outcomes, fact_latency_ms),
+        (web_outcomes, web_latency_ms),
+        (
+            visual_outcomes,
+            visual_latency_ms,
+        ),
+    ) = cast(
+        tuple[
+            tuple[list[Any], float],
+            tuple[list[Any], float],
+            tuple[list[Any], float],
+        ],
         await asyncio.gather(
             _run_group(
                 [(run_fact_check, task) for task in plan.fact_check_tasks],
@@ -259,6 +283,38 @@ async def execute(
     web_research, web_status, web_errors = _web_normalize(web_outcomes, web_tasks)
     visual_candidates, visual_status, visual_errors = await _visual_normalize(
         visual_outcomes, context, demo_index
+    )
+
+    # T37: one structured event per branch; branch status carries failure
+    # visibility (error / partial_failure / success_no_matches / demo_fallback).
+    log_event(
+        context.verification_id,
+        "fact_check_search",
+        "fact_check",
+        fact_latency_ms,
+        fact_status,
+        tasks=len(plan.fact_check_tasks),
+        evidence=len(fact_checks),
+    )
+    log_event(
+        context.verification_id,
+        "web_research",
+        "web_research",
+        web_latency_ms,
+        web_status,
+        tasks=len(web_tasks),
+        searches=sum(result.searches_used for result in web_research),
+        pages_fetched=sum(result.pages_fetched for result in web_research),
+    )
+    log_event(
+        context.verification_id,
+        "visual_source_search",
+        "visual",
+        visual_latency_ms,
+        visual_status,
+        tasks=len(plan.visual_search_tasks),
+        candidates=len(visual_candidates),
+        demo_fallback=visual_status == "demo_fallback",
     )
 
     return RawValidationBundle(
