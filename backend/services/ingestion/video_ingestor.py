@@ -84,9 +84,9 @@ def _probe_ffprobe(path: Path, settings: Settings) -> dict:
 def save_upload(file, ver_id: str, settings: Settings | None = None) -> Path:
     """Stream ``file`` to ``WORKDIR/{ver_id}/original.mp4`` and validate it.
 
-    ``file`` must expose ``read(size) -> bytes`` (sync or async; async reads
-    are awaited via the running loop — do not pass a raw coroutine from an
-    event loop you don't control). Returns the validated saved path.
+    ``file`` must be a synchronous file-like object exposing ``read(size) -> bytes``
+    (e.g. ``SpooledTemporaryFile`` or an opened file handle); async uploads must
+    be adapted by the caller. Returns the validated saved path.
     """
     if settings is None:
         settings = Settings()
@@ -115,7 +115,9 @@ def save_upload(file, ver_id: str, settings: Settings | None = None) -> Path:
                 out.write(chunk)
 
         # Container magic: MP4 starts with a 4-byte big-endian size + "ftyp".
-        header = dest.read_bytes()[:12]
+        # Read exactly the 12-byte header; never load the whole file.
+        with dest.open("rb") as handle:
+            header = handle.read(12)
         if len(header) < 12 or header[4:8] != b"ftyp":
             raise InvalidVideoError("upload is not an MP4 container (missing ftyp magic)")
 

@@ -54,6 +54,29 @@ class FakeUpload:
         return chunk
 
 
+def test_magic_validation_reads_only_header_not_whole_file(settings, tmp_path, monkeypatch):
+    """F18-1 regression: magic check must open the file and read 12 bytes, never read_bytes()."""
+    from backend.services.ingestion import video_ingestor
+
+    # Any full-file read (the old dest.read_bytes()) fails this test loudly.
+    def _no_full_read(self):
+        raise AssertionError("magic validation must not read_bytes() the whole upload")
+
+    video = make_video(tmp_path)
+    # Read the fixture bytes BEFORE patching: the patch applies to every Path.
+    payload = video.read_bytes()
+
+    # Any full-file read (the old dest.read_bytes()) fails this test loudly.
+    def _no_full_read(self):
+        raise AssertionError("magic validation must not read_bytes() the whole upload")
+
+    monkeypatch.setattr(video_ingestor.Path, "read_bytes", _no_full_read)
+
+    saved = save_upload(FakeUpload(payload), new_verification_id(), settings=settings)
+
+    assert saved.exists() and saved.stat().st_size > 0
+
+
 def test_new_verification_id_matches_generated_format():
     assert new_verification_id() != new_verification_id()
 
