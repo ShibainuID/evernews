@@ -239,6 +239,22 @@ def test_semantic_fallback_not_called_for_known_location_mismatch():
     assert result.location.confidence == 1.0
 
 
+def test_semantic_fallback_not_called_for_known_parent_value_mismatch():
+    # Indonesia and Thailand are both dictionary entries (parent values): the
+    # mismatch is deterministic and must never consult the fallback (F15-2).
+    context = build_video_context(
+        "ver_f12",
+        location=build_claim("Indonesia", "Indonesia", 0.9, ["speech_02"]),
+    )
+    result = compare(
+        context,
+        build_source_context(location="Thailand", date=None),
+        semantic_equiv=_failing_fallback,
+    )
+    assert result.location.status is ComparisonStatus.MISMATCH
+    assert result.location.confidence == 1.0
+
+
 def test_semantic_fallback_called_for_unrecognized_location_pair():
     # "Bandung" is not a dictionary entry: the pair is unresolved, so the
     # fallback is consulted and its True maps to CONSISTENT.

@@ -49,14 +49,20 @@ def _event_known(value: str) -> bool:
 
 
 def _location_known(value: str) -> bool:
-    """True when the location dictionary recognizes the value (alias or city key).
+    """True when the location dictionary recognizes the value.
 
-    Uses the same keying as ``backend.utils.text._key`` without importing the
-    private helper: lowercase, comma-split to the core city, alias-resolved.
+    Recognized = alias, city key, or parent name of the T09 tables (F15-2:
+    parent values like "Indonesia"/"Thailand" are explicit dictionary entries
+    too). Uses the same keying as ``backend.utils.text._key`` without importing
+    the private helper: lowercase, comma-split to the core city, alias-resolved.
     """
     core = value.strip().lower().split(",")[0]
     resolved = _LOCATION_ALIASES.get(core, core)
-    return core in _LOCATION_ALIASES or resolved in _LOCATION_PARENTS
+    return (
+        core in _LOCATION_ALIASES
+        or resolved in _LOCATION_PARENTS
+        or resolved in _LOCATION_PARENTS.values()
+    )
 
 
 def _pair_status(
