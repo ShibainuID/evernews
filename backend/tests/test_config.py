@@ -7,6 +7,8 @@ _ALL_ENV_KEYS = (
     "MAX_VIDEO_DURATION_SEC",
     "MAX_VIDEO_SIZE_MB",
     "WORKDIR",
+    "WHISPER_MODEL_SIZE",
+    "OCR_LANG",
     "OPENCODE_GO_API_KEY",
     "OPENCODE_GO_BASE_URL",
     "LUNA_MODEL",
@@ -35,6 +37,8 @@ def test_defaults_from_handoff_25(monkeypatch):
     assert settings.max_video_duration_sec == 15
     assert settings.max_video_size_mb == 50
     assert settings.workdir == "./data/work"
+    assert settings.whisper_model_size == "tiny"
+    assert settings.ocr_lang == "en"
     assert settings.opencode_go_api_key == ""
     assert settings.opencode_go_base_url == "https://opencode.ai/zen/go/v1"
     assert settings.luna_model == "gpt-5.6-luna"
