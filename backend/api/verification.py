@@ -36,6 +36,7 @@ from backend.services.ingestion.video_ingestor import (
     new_verification_id,
     save_upload,
 )
+from backend.services.validation.cache import query_cache
 from backend.state import STATUS_COMPLETED, STATUS_FAILED, STATUS_PROCESSING
 
 router = APIRouter()
@@ -44,7 +45,12 @@ logger = logging.getLogger(__name__)
 
 def get_providers() -> pipeline.Providers:
     """Production provider bundle (T21 adapters, all lazy: no model load or
-    network at construction). Tests override this dependency with fakes."""
+    network at construction). Tests override this dependency with fakes.
+
+    The T39 demo query-cache singleton rides on the bundle: every production
+    verification reuses cached provider results for identical queries/frames
+    (24h TTL, process-local), making repeated demo runs fast and identical.
+    """
     from backend.providers.google_vision import GoogleVisionProvider
     from backend.providers.luna import OpenCodeGoLunaProvider
     from backend.providers.opencode import OpenCodeResearchProvider
@@ -57,6 +63,7 @@ def get_providers() -> pipeline.Providers:
         luna=OpenCodeGoLunaProvider(),
         vision=GoogleVisionProvider(),
         web_research=OpenCodeResearchProvider(),
+        cache=query_cache,
     )
 
 

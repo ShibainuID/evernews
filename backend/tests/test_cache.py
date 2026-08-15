@@ -8,12 +8,15 @@ valid cache entries, fact/web/vision keys stay separated by origin, visual
 frame keys hash ``KeyframeRef.local_path`` bytes deterministically, demo
 fallback candidates never enter the cache under web/vision keys, and Case A
 run three times produces identical bundles with provider counters proving
-reuse (design §15 DoD). The process-local singleton is cleared before and
-after every test to avoid cross-test contamination.
+reuse (design §15 DoD). F39-1 wiring: the production ``get_providers`` bundle
+carries the ``query_cache`` singleton and ``run_verification`` forwards
+``providers.cache`` to ``orchestrator.execute``. The process-local singleton
+is cleared before and after every test to avoid cross-test contamination.
 """
 
 import time
 from concurrent.futures import ThreadPoolExecutor
+from typing import Any
 
 import pytest
 
@@ -29,6 +32,9 @@ from backend.schemas.investigation import (
     WebResearchTask,
 )
 from backend.schemas.result import SourceCandidate
+from backend.services import pipeline
+from backend.services.ingestion.video_ingestor import new_verification_id
+from backend.services.validation import orchestrator
 from backend.services.validation.cache import (
     QueryCache,
     DEFAULT_TTL_SECONDS,
@@ -38,7 +44,9 @@ from backend.services.validation.cache import (
     web_research_key,
 )
 from backend.services.validation.orchestrator import execute
-from backend.tests.fixtures.golden_cases import case_a
+from backend.tests.fixtures.golden_cases import build_bundle, case_a
+from backend.tests.fixtures.video_factory import make_video, require_ffmpeg
+from backend.tests.test_pipeline import _case_a
 
 
 # --- singleton hygiene: no state leaks between tests ---
@@ -453,3 +461,70 @@ async def test_case_a_three_runs_identical_with_provider_counters(tmp_path):
         "web_research": "success",
         "visual_search": "success",
     }
+
+
+# --- F39-1: production wiring (Providers seam + get_providers) ---
+
+
+def test_production_get_providers_carries_singleton_cache(monkeypatch):
+    """The default production bundle must supply the demo singleton (F39-1)."""
+    import backend.api.verification as api_verification
+    import backend.providers.google_vision as google_vision_mod
+    import backend.providers.luna as luna_mod
+    import backend.providers.opencode as opencode_mod
+    import backend.providers.paddleocr as paddleocr_mod
+    import backend.providers.whisper as whisper_mod
+
+    # Constructors are lazy by contract; stub them so the test never touches
+    # models/credentials — only the bundle wiring is under test.
+    monkeypatch.setattr(whisper_mod, "FasterWhisperSpeechProvider", lambda: object())
+    monkeypatch.setattr(paddleocr_mod, "PaddleOCRProvider", lambda: object())
+    monkeypatch.setattr(luna_mod, "OpenCodeGoLunaProvider", lambda: object())
+    monkeypatch.setattr(google_vision_mod, "GoogleVisionProvider", lambda: object())
+    monkeypatch.setattr(opencode_mod, "OpenCodeResearchProvider", lambda: object())
+
+    providers = api_verification.get_providers()
+    assert providers.cache is query_cache
+
+
+@pytest.fixture(scope="module")
+def _video(tmp_path_factory):
+    require_ffmpeg()
+    return make_video(tmp_path_factory.mktemp("media"))
+
+
+@pytest.fixture()
+def _settings(tmp_path, monkeypatch):
+    """Isolated WORKDIR; default settings otherwise (test_pipeline pattern)."""
+    monkeypatch.delenv("WORKDIR", raising=False)
+    from backend.config import Settings
+
+    return Settings(workdir=str(tmp_path / "work"))
+
+
+async def test_pipeline_forwards_providers_cache(_video, _settings, monkeypatch):
+    """run_verification must hand ``providers.cache`` to execute (F39-1)."""
+    recorded: dict[str, Any] = {}
+
+    async def _stub_execute(context, plan, **kwargs):
+        recorded["cache"] = kwargs.get("cache")
+        golden = case_a().bundle  # carries the evidence IDs the synthesis raw cites
+        return build_bundle(
+            context.verification_id,
+            fact_checks=golden.fact_checks,
+            web_research=golden.web_research,
+        )
+
+    monkeypatch.setattr(orchestrator, "execute", _stub_execute)
+
+    providers = _case_a(new_verification_id())
+    providers.cache = query_cache
+    result = await pipeline.run_verification(
+        new_verification_id(),
+        pipeline.VerificationRequest(video_path=_video),
+        providers,
+        settings=_settings,
+    )
+
+    assert result.verification_id
+    assert recorded["cache"] is query_cache  # forwarded, not defaulted to None

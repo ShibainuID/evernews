@@ -49,6 +49,7 @@ from backend.services.evidence import comparator, normalizer, source_ranker, syn
 from backend.services.preprocessing import ffmpeg, keyframes
 from backend.services.result import result_builder
 from backend.services.validation import orchestrator, planner
+from backend.services.validation.cache import QueryCache
 from backend.state import STATUS_COMPLETED, STATUS_FAILED
 from backend.utils.fetch import SafeFetchResult
 from backend.utils.observability import log_event, verification_scope
@@ -92,7 +93,11 @@ class Providers:
     seams (T28/T27/T13); T32's orchestrator lazy-loads production defaults
     for the first two when None. ``isolated`` moves the heavy native
     providers into spawned child processes; tests set it False so scripted
-    fakes run deterministically in-process.
+    fakes run deterministically in-process. ``cache`` (T39) is the demo
+    query-cache seam forwarded to ``orchestrator.execute``; None (the
+    default) keeps the pre-cache no-cache behavior — the production bundle
+    (``backend/api/verification.get_providers``) supplies the process-local
+    singleton so repeated demo runs reuse provider results.
     """
 
     speech: SpeechProvider
@@ -104,6 +109,7 @@ class Providers:
     demo_index: orchestrator.DemoSearch | None = None
     page_fetcher: Callable[[str], Awaitable[SafeFetchResult]] | None = None
     isolated: bool = True
+    cache: QueryCache | None = None
 
 
 # --- heavy-provider process isolation (stdlib multiprocessing, spawn) ---
@@ -367,6 +373,7 @@ async def run_verification(
                 investigate=providers.web_research.investigate,
                 run_visual=_visual_runner(providers, keyframe_refs),
                 demo_index=providers.demo_index,
+                cache=providers.cache,
             )
             state_module.store.update(ver_id, bundle=bundle.model_dump(mode="json"))
             if bundle.errors:
