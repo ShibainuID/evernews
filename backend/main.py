@@ -12,6 +12,7 @@ from pathlib import Path
 from fastapi import FastAPI
 
 from backend.api.health import router
+from backend.api.verification import router as verification_router
 from backend.config import Settings
 
 RETENTION_WINDOW_SEC = 24 * 60 * 60  # stale work/{ver_id}/ dirs older than this are removed on startup
@@ -36,6 +37,7 @@ def create_app() -> FastAPI:
     app = FastAPI(title="AI Media Source Tracing", lifespan=lifespan)
     app.state.settings = settings
     app.include_router(router)
+    app.include_router(verification_router, prefix="/api/v1/verification")
     return app
 
 
