@@ -19,6 +19,9 @@ class Settings(BaseSettings):
     # Speech (faster-whisper)
     whisper_model_size: str = "tiny"
 
+    # OCR (PaddleOCR)
+    ocr_lang: str = "en"
+
     # GPT-5.6 Luna through OpenCode Go
     opencode_go_api_key: str = ""
     opencode_go_base_url: str = "https://opencode.ai/zen/go/v1"
