@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     opencode_go_api_key: str = ""
     opencode_go_base_url: str = "https://opencode.ai/zen/go/v1"
     luna_model: str = "gpt-5.6-luna"
+    luna_timeout_sec: int = 60
 
     # Local OpenCode research runtime
     opencode_server_url: str = "http://127.0.0.1:4096"

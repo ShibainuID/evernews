@@ -12,6 +12,7 @@ _ALL_ENV_KEYS = (
     "OPENCODE_GO_API_KEY",
     "OPENCODE_GO_BASE_URL",
     "LUNA_MODEL",
+    "LUNA_TIMEOUT_SEC",
     "OPENCODE_SERVER_URL",
     "OPENCODE_SERVER_USERNAME",
     "OPENCODE_SERVER_PASSWORD",
@@ -42,6 +43,7 @@ def test_defaults_from_handoff_25(monkeypatch):
     assert settings.opencode_go_api_key == ""
     assert settings.opencode_go_base_url == "https://opencode.ai/zen/go/v1"
     assert settings.luna_model == "gpt-5.6-luna"
+    assert settings.luna_timeout_sec == 60
     assert settings.opencode_server_url == "http://127.0.0.1:4096"
     assert settings.opencode_server_username == "opencode"
     assert settings.opencode_server_password == ""

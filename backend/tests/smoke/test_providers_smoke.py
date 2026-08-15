@@ -1,8 +1,9 @@
-"""Provider smoke tests (T24/T25): real faster-whisper transcription and
-PaddleOCR extraction, opt-in only.
+"""Provider smoke tests (T24/T25/T26): real faster-whisper transcription,
+PaddleOCR extraction, and a real GPT-5.6 Luna visual call, opt-in only.
 
 Skipped unless ``RUN_PROVIDER_SMOKE=1``. May download model weights to the
-user cache on first run; weights are never committed.
+user cache on first run; weights are never committed. The Luna test also
+requires ``OPENCODE_GO_API_KEY`` (never committed, never logged).
 """
 
 import os
@@ -13,8 +14,9 @@ from typing import Any
 
 import pytest
 
+from backend.providers.luna import OpenCodeGoLunaProvider
 from backend.providers.whisper import FasterWhisperSpeechProvider
-from backend.schemas.context import SpeechExtraction
+from backend.schemas.context import SpeechExtraction, VisualObservation
 from backend.tests.fixtures.video_factory import make_video, require_ffmpeg
 
 pytestmark = pytest.mark.skipif(
@@ -116,3 +118,27 @@ def test_paddleocr_extracts_text_from_synthetic_image(tmp_path):
         text=True,
     )
     assert result.returncode == 0, f"subprocess failed:\n{result.stdout}\n{result.stderr}"
+
+
+@pytest.mark.skipif(
+    os.environ.get("OPENCODE_GO_API_KEY", "") == "",
+    reason="opt-in: needs OPENCODE_GO_API_KEY (never committed)",
+)
+async def test_luna_visual_observation_over_real_keyframe(tmp_path):
+    """Real GPT-5.6 Luna call over one synthetic keyframe (HANDOFF §5.3, §41).
+
+    The provider reads the key and base URL from Settings, so this only runs
+    when the credential env var is present; the key itself is never logged.
+    """
+    image = _make_text_image(tmp_path)
+    provider = OpenCodeGoLunaProvider()
+
+    observation = await provider.structured(
+        "Describe the observable scene in this keyframe. Return JSON only.",
+        VisualObservation,
+        image_paths=[str(image)],
+    )
+
+    assert isinstance(observation, VisualObservation)
+    assert isinstance(observation.scene_type, str) or observation.scene_type is None
+    assert isinstance(observation.objects, list)
