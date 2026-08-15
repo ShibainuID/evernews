@@ -158,10 +158,13 @@ def _manipulation_types(
         )
         if dimension.status is ComparisonStatus.MISMATCH
     ]
-    # old footage is only claimed for a reliable visual match that still
-    # mismatches the current context — never for an unknown/weak match
+    # old footage is only claimed for a real selected earlier source (T33:
+    # best_visual_source_id + derived context) whose reliable visual match
+    # still mismatches the current context — never from a match label alone
     if (
         synthesis.visual_match in ("high", "medium")
+        and synthesis.best_visual_source_id is not None
+        and synthesis.probable_source_context is not None
         and has_material_mismatch(comparison)
     ):
         types.append("old_footage_reused")

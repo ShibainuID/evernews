@@ -251,6 +251,27 @@ def test_old_footage_reused_requires_mismatch_and_reliable_visual():
     assert "old_footage_reused" not in result.manipulation_types
 
 
+def test_old_footage_reused_requires_selected_source_context():
+    """High visual + mismatch alone must not label old footage: a real selected
+    source/context (T33 invariants) is required too (finding F34-1)."""
+    golden = case_a()
+    result = build(
+        golden.video_context,
+        _synthesis(
+            verification_id="ver_a",
+            visual_match="high",
+            best_visual_source_id=None,
+            probable_source_context=None,
+            supporting_evidence_ids=[],
+        ),
+        golden.expected_comparison,
+        [],
+    )
+    assert "location_changed" in result.manipulation_types
+    assert "date_changed" in result.manipulation_types
+    assert "old_footage_reused" not in result.manipulation_types
+
+
 # --- wording guard (§15.2/§43) ---
 
 
