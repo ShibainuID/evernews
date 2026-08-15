@@ -60,6 +60,15 @@ def _run_media(args: list[str], timeout: int, fail_code: str, fail_prefix: str) 
     return result
 
 
+def run_ffmpeg(args: list[str], timeout: int = _TRANSCODE_TIMEOUT_SEC) -> subprocess.CompletedProcess:
+    """Run a fixed-argument ffmpeg command; map failures to ``transcode_failed``.
+
+    Public entry point for transcode invocations (no shell, no user-derived
+    flags); ffprobe keeps its own probe path.
+    """
+    return _run_media(args, timeout, "transcode_failed", "ffmpeg failed")
+
+
 def _probe(path: Path) -> dict:
     result = _run_media(
         [
@@ -128,7 +137,7 @@ def preprocess(ver_id: str, original_path: Path, settings: Settings | None = Non
             )
 
         work_dir.mkdir(parents=True, exist_ok=True)
-        _run_media(
+        run_ffmpeg(
             [
                 "ffmpeg",
                 "-y",
@@ -146,13 +155,10 @@ def preprocess(ver_id: str, original_path: Path, settings: Settings | None = Non
                 "aac",
                 "-shortest",
                 str(normalized),
-            ],
-            _TRANSCODE_TIMEOUT_SEC,
-            "transcode_failed",
-            "video normalization failed",
+            ]
         )
         if has_audio:
-            _run_media(
+            run_ffmpeg(
                 [
                     "ffmpeg",
                     "-y",
@@ -168,10 +174,7 @@ def preprocess(ver_id: str, original_path: Path, settings: Settings | None = Non
                     "-ac",
                     str(_AUDIO_CHANNELS),
                     str(audio),
-                ],
-                _TRANSCODE_TIMEOUT_SEC,
-                "transcode_failed",
-                "audio extraction failed",
+                ]
             )
         else:
             _write_empty_wav(audio)

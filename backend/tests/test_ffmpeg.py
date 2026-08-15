@@ -12,10 +12,12 @@ import pytest
 
 from backend.config import Settings
 from backend.services.ingestion.video_ingestor import new_verification_id
+from backend.services.preprocessing import ffmpeg as ffmpeg_module
 from backend.services.preprocessing.ffmpeg import (
     PreprocessingArtifacts,
     PreprocessingError,
     preprocess,
+    run_ffmpeg,
 )
 from backend.tests.fixtures.video_factory import (
     make_audio_only_m4a,
@@ -182,3 +184,53 @@ def test_all_subprocess_calls_use_fixed_argv_no_shell(settings, tmp_path, monkey
             assert isinstance(arg, str)
             # the only non-fixed tokens are the trusted paths; no user flags, no shell metachars
             assert arg in known_paths or not any(ch in arg for ch in (";", "&", "|", "$", "`", ".."))
+
+
+def test_run_ffmpeg_helper_public_default_timeout_and_error_mapping(tmp_path):
+    # non-zero ffmpeg exit maps to the explicit transcode_failed code
+    with pytest.raises(PreprocessingError) as exc:
+        run_ffmpeg(["ffmpeg", "-y", "-loglevel", "error", "-i", "/nonexistent/input.mp4", str(tmp_path / "o.mp4")])
+    assert exc.value.code == "transcode_failed"
+    assert str(exc.value)
+
+    # success delegates through and returns the CompletedProcess
+    result = run_ffmpeg(["ffmpeg", "-version"])
+    assert result.returncode == 0
+
+
+def test_preprocess_routes_transcodes_through_run_ffmpeg(settings, tmp_path, monkeypatch):
+    calls: list[list[str]] = []
+    real_run_ffmpeg = ffmpeg_module.run_ffmpeg
+
+    def spy(args, **kwargs):
+        calls.append(list(args))
+        return real_run_ffmpeg(args, **kwargs)
+
+    monkeypatch.setattr(ffmpeg_module, "run_ffmpeg", spy)
+
+    ver_id = new_verification_id()
+    artifacts = preprocess(ver_id, make_video(tmp_path), settings=settings)
+    assert artifacts.normalized_path.exists() and artifacts.audio_path.exists()
+
+    # normalize + audio extraction, both through the public helper, no probe here
+    assert len(calls) == 2
+    assert all(argv[0] == "ffmpeg" for argv in calls)
+    assert any("-c:v" in argv and "libx264" in argv for argv in calls)
+    assert any("-c:a" in argv and "pcm_s16le" in argv for argv in calls)
+
+
+def test_preprocess_no_audio_routes_only_normalize_through_run_ffmpeg(settings, tmp_path, monkeypatch):
+    calls: list[list[str]] = []
+    real_run_ffmpeg = ffmpeg_module.run_ffmpeg
+
+    def spy(args, **kwargs):
+        calls.append(list(args))
+        return real_run_ffmpeg(args, **kwargs)
+
+    monkeypatch.setattr(ffmpeg_module, "run_ffmpeg", spy)
+
+    artifacts = preprocess(new_verification_id(), make_video_no_audio(tmp_path), settings=settings)
+
+    assert artifacts.has_audio is False
+    assert artifacts.audio_path.exists() and artifacts.audio_path.stat().st_size == 44
+    assert len(calls) == 1  # normalize only; empty WAV is written by stdlib, not ffmpeg
