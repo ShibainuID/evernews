@@ -45,3 +45,7 @@ class Settings(BaseSettings):
     enable_factcheck_image_search: bool = False
     enable_local_visual_embeddings: bool = False
     enable_local_feature_matching: bool = False
+
+    # Planner bounds (T31)
+    max_web_research_tasks: int = 3
+    max_queries_per_task: int = 4

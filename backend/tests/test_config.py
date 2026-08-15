@@ -23,6 +23,8 @@ _ALL_ENV_KEYS = (
     "ENABLE_FACTCHECK_IMAGE_SEARCH",
     "ENABLE_LOCAL_VISUAL_EMBEDDINGS",
     "ENABLE_LOCAL_FEATURE_MATCHING",
+    "MAX_WEB_RESEARCH_TASKS",
+    "MAX_QUERIES_PER_TASK",
 )
 
 
@@ -54,8 +56,18 @@ def test_defaults_from_handoff_25(monkeypatch):
     assert settings.enable_factcheck_image_search is False
     assert settings.enable_local_visual_embeddings is False
     assert settings.enable_local_feature_matching is False
+    assert settings.max_web_research_tasks == 3
+    assert settings.max_queries_per_task == 4
 
 
 def test_env_override_readable(monkeypatch):
     monkeypatch.setenv("MAX_VIDEO_DURATION_SEC", "20")
     assert Settings().max_video_duration_sec == 20
+
+
+def test_planner_bounds_env_override(monkeypatch):
+    monkeypatch.setenv("MAX_WEB_RESEARCH_TASKS", "2")
+    monkeypatch.setenv("MAX_QUERIES_PER_TASK", "6")
+    settings = Settings()
+    assert settings.max_web_research_tasks == 2
+    assert settings.max_queries_per_task == 6
