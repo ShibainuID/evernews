@@ -136,6 +136,17 @@ def _uniform_timestamps(duration: float, count: int) -> list[float]:
     return [i * duration / count for i in range(count)]
 
 
+def _cap_evenly(
+    timestamps: list[float], frames: list[Path], limit: int
+) -> tuple[list[float], list[Path]]:
+    """Chronological cap keeping ``limit`` evenly spaced items, first and last
+    always included — the scene branch's guard for the 3–6 contract."""
+    if len(timestamps) <= limit:
+        return timestamps, frames
+    indices = [(i * (len(timestamps) - 1)) // (limit - 1) for i in range(limit)]
+    return [timestamps[i] for i in indices], [frames[i] for i in indices]
+
+
 def _extract_uniform_frames(path: Path, out_dir: Path, duration: float, count: int) -> list[Path]:
     """fps = count/duration emits exactly count evenly spaced frames from t=0."""
     rate = f"{count / duration:.6f}"
@@ -216,7 +227,12 @@ def select_keyframes(
                     kept_ts.append(ts)
                     kept_frames.append(frame)
             if len(kept_ts) >= _MIN_KEYFRAMES:
-                return _to_refs(ver_id, kept_ts, kept_frames, SCENE_REASON)
+                selected_ts, selected_frames = _cap_evenly(kept_ts, kept_frames, _MAX_KEYFRAMES)
+                # output dir holds exactly the returned frames, nothing else
+                for frame in kept_frames:
+                    if frame not in selected_frames:
+                        frame.unlink(missing_ok=True)
+                return _to_refs(ver_id, selected_ts, selected_frames, SCENE_REASON)
 
         # fallback: scene detection yielded no/too few frames (or all were
         # near-duplicates) — deterministic uniform sampling

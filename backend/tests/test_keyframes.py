@@ -139,6 +139,36 @@ def test_single_scene_change_is_too_few_and_falls_back(settings, tmp_path):
     assert timestamps == sorted(timestamps)
 
 
+def test_scene_candidates_capped_at_six_with_even_coverage(settings, tmp_path):
+    """>6 distinct scene cuts (8 colors, dedupe disabled) → exactly 6 frames,
+    evenly spaced across the candidates, and the output dir holds exactly the
+    returned refs (no unreturned scene files left behind)."""
+    video = _concat_video(
+        tmp_path,
+        "many_scenes.mp4",
+        # hex colors whose limited-range luma deltas (219,154,64,104,169,40,64)
+        # all exceed the scene threshold, so all 7 cuts fire deterministically
+        ["0x000000", "0xFFFFFF", "0xFF0000", "0x00FF00", "0x0000FF", "0xFFFF00", "0x00FFFF", "0xFF00FF"],
+    )
+    ver_id = new_verification_id()
+
+    kfs = select_keyframes(
+        video, ver_id, settings=settings, is_duplicate=lambda candidate, selected: False
+    )
+
+    assert len(kfs) == 6
+    timestamps = [k.timestamp_sec for k in kfs]
+    assert timestamps == sorted(timestamps)
+    assert len(set(timestamps)) == len(timestamps)
+    # early/late coverage: first cut (1.5s) and last cut (10.5s) both survive
+    assert abs(timestamps[0] - 1.5) < 0.25
+    assert abs(timestamps[-1] - 10.5) < 0.25
+    # output dir contains exactly the returned frame files, nothing else
+    keyframe_dir = Path(settings.workdir) / ver_id / "keyframes"
+    assert {p.name for p in keyframe_dir.glob("*.jpg")} == {Path(k.local_path).name for k in kfs}
+    assert all(Path(k.local_path).exists() for k in kfs)
+
+
 def test_default_near_duplicate_filter_drops_repeated_scene_frame(settings, tmp_path):
     """A repeated color (white@1.5s and white@4.5s) is selected only once."""
     video = _concat_video(tmp_path, "repeated.mp4", ["black", "white", "gray", "white", "black"])
