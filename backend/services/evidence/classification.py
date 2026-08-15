@@ -35,6 +35,9 @@ def classify(
         for dim in (comparison.event, comparison.location, comparison.date)
     ):
         return ResultClassification.CONTEXT_CONSISTENT_WITH_SOURCE
-    if has_textual_conflict:
+    # F17-1: textual conflict alone is not enough; a strong visual match
+    # blocks claim_conflict_found (it resolves via rules 1-3 or falls
+    # through to the safe insufficient_evidence).
+    if has_textual_conflict and not strong_visual:
         return ResultClassification.CLAIM_CONFLICT_FOUND
     return ResultClassification.INSUFFICIENT_EVIDENCE

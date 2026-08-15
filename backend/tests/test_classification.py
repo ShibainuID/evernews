@@ -127,6 +127,18 @@ def test_textual_conflict_without_strong_visual_is_claim_conflict_found():
     )
 
 
+def test_strong_visual_with_unknown_comparison_and_conflict_is_insufficient():
+    # F17-1: claim_conflict_found requires textual conflict AND no strong
+    # visual match; a strong visual that cannot support rules 1-3 is the
+    # safe insufficient_evidence, never claim_conflict_found.
+    all_unknown = _comparison("unknown", "unknown", "unknown")
+    for visual in ("high", "medium"):
+        assert (
+            classify(visual, all_unknown, True, True)
+            is ResultClassification.INSUFFICIENT_EVIDENCE
+        )
+
+
 def test_visual_unknown_never_possible_false_context():
     mismatch = _comparison("consistent", "mismatch", "mismatch")
     assert has_material_mismatch(mismatch)
