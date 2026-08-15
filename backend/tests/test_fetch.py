@@ -262,6 +262,32 @@ async def test_unresolvable_host_fails_closed(monkeypatch):
         await safe_fetch("https://does-not-exist.example/")
 
 
+async def test_userinfo_cannot_smuggle_a_private_host(monkeypatch):
+    """user:pass@host userinfo never hides the real host from the guard."""
+    install_dns(monkeypatch, {"127.0.0.1": ["127.0.0.1"]})
+    install_http(monkeypatch, [FakeResponse()])
+
+    with pytest.raises(UnsafeURLError):
+        await safe_fetch("http://example.com@127.0.0.1/")
+
+
+@pytest.mark.parametrize("ip", ["::ffff:10.0.0.1", "::ffff:192.168.1.1"])
+async def test_ipv4_mapped_private_ipv6_rejected(monkeypatch, ip):
+    install_dns(monkeypatch, {ip: [ip]})
+    install_http(monkeypatch, [FakeResponse()])
+
+    with pytest.raises(UnsafeURLError):
+        await safe_fetch(f"http://[{ip}]/")
+
+
+async def test_scheme_relative_url_rejected(monkeypatch):
+    install_dns_fail_loudly(monkeypatch)
+    install_http(monkeypatch, [FakeResponse()])
+
+    with pytest.raises(UnsafeURLError):
+        await safe_fetch("//10.0.0.1/")  # no scheme -> never allowed, no DNS consulted
+
+
 # --- manual redirects --------------------------------------------------------
 
 
@@ -317,6 +343,18 @@ async def test_redirect_target_to_private_ip_rejected(monkeypatch):
     install_dns(monkeypatch, {"example.com": [PUBLIC_IP], "10.0.0.1": ["10.0.0.1"]})
     record = {}
     install_http(monkeypatch, [redirect_response("http://10.0.0.1/evil")], record)
+
+    with pytest.raises(UnsafeURLError):
+        await safe_fetch("https://example.com/")
+
+    assert record["client"].urls == ["https://example.com/"]  # target never requested
+
+
+async def test_redirect_target_hostname_resolving_to_private_ip_rejected(monkeypatch):
+    """A redirect to a hostname whose DNS resolves to a private IP is refused."""
+    install_dns(monkeypatch, {"example.com": [PUBLIC_IP], "internal.example.com": ["10.0.0.5"]})
+    record = {}
+    install_http(monkeypatch, [redirect_response("http://internal.example.com/evil")], record)
 
     with pytest.raises(UnsafeURLError):
         await safe_fetch("https://example.com/")
@@ -403,6 +441,7 @@ async def test_infinite_stream_is_bounded(monkeypatch):
         "::1",  # IPv6 loopback
         "::",  # IPv6 unspecified
         "::ffff:127.0.0.1",  # IPv4-mapped loopback
+        "::ffff:10.0.0.1",  # IPv4-mapped private
         "fd00::1",  # IPv6 unique local
         "fe80::1",  # IPv6 link-local
     ],

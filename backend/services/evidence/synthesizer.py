@@ -36,6 +36,7 @@ from backend.schemas.result import (
     VisualMatchLabel,
 )
 from backend.utils.llm import StructuredOutputError
+from backend.utils.prompt_guard import wrap_untrusted
 
 PROMPT_PATH = Path(__file__).resolve().parents[2] / "prompts" / "evidence_synthesizer.txt"
 PROMPT = PROMPT_PATH.read_text()
@@ -114,7 +115,9 @@ def _render_evidence(bundle: RawValidationBundle) -> str:
                 f"title={e.title or 'none'} published_at={e.published_at or 'none'} "
                 f"event={e.event or 'none'} location={e.location or 'none'} "
                 f"date_context={e.date_context or 'none'} supports={e.supports_question} "
-                f"contradicts={e.contradicts_question} excerpt={e.relevant_excerpt or 'none'} "
+                f"contradicts={e.contradicts_question} "
+                # page text is data, never a trusted instruction block (T40)
+                f"excerpt={wrap_untrusted(e.relevant_excerpt) if e.relevant_excerpt else 'none'} "
                 f"url={e.url}"
             )
         for note in result.unresolved:
