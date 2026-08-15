@@ -120,7 +120,10 @@ async def safe_fetch(url: str, *, timeout: float = _REQUEST_TIMEOUT) -> SafeFetc
     _reject_unsafe(url)
     async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
         for hop in range(MAX_REDIRECTS + 1):
-            response = await client.get(url)
+            request = client.build_request("GET", url)
+            # stream=True: get() would eagerly buffer the whole body before
+            # _read_limited, defeating the MAX_FETCH_BYTES cap (F12-1)
+            response = await client.send(request, stream=True)
             location = (
                 response.headers.get("location")
                 if response.status_code in _REDIRECT_STATUSES

@@ -41,9 +41,14 @@ class FakeClient:
     def __init__(self, responses):
         self._responses = list(responses)
         self.urls = []
+        self.send_kwargs = []
 
-    async def get(self, url):
-        self.urls.append(url)
+    def build_request(self, method, url):
+        return httpx.Request(method, url)
+
+    async def send(self, request, **kwargs):
+        self.send_kwargs.append(kwargs)
+        self.urls.append(str(request.url))
         if len(self._responses) > 1:
             return self._responses.pop(0)
         return self._responses[0]
@@ -117,6 +122,22 @@ async def test_https_fetch_returns_result(monkeypatch):
     assert record["client"].urls == ["https://example.com/"]
     assert record["kwargs"]["timeout"] == 10.0
     assert record["kwargs"]["follow_redirects"] is False
+
+
+async def test_every_hop_streams_and_closes(monkeypatch):
+    """Hops must use client.send(stream=True); bodies must never be eagerly buffered."""
+    public_dns(monkeypatch, "example.com", "example.net")
+    responses = [redirect_response("https://example.net/"), FakeResponse(body=b"ok")]
+    record = {}
+    install_http(monkeypatch, responses, record)
+
+    result = await safe_fetch("https://example.com/")
+
+    assert record["client"].send_kwargs == [{"stream": True}, {"stream": True}]
+    assert record["client"].urls == ["https://example.com/", "https://example.net/"]
+    assert responses[0].closed is True  # redirect body closed without being read
+    assert responses[1].closed is True  # final response closed after bounded read
+    assert result.body == b"ok"
 
 
 async def test_custom_timeout_is_forwarded(monkeypatch):
