@@ -16,6 +16,9 @@ class Settings(BaseSettings):
     max_video_size_mb: int = 50
     workdir: str = "./data/work"
 
+    # Speech (faster-whisper)
+    whisper_model_size: str = "tiny"
+
     # GPT-5.6 Luna through OpenCode Go
     opencode_go_api_key: str = ""
     opencode_go_base_url: str = "https://opencode.ai/zen/go/v1"
