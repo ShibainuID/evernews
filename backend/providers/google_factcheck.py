@@ -47,7 +47,7 @@ async def _get_page(client: httpx.AsyncClient, params: dict[str, Any]) -> dict:
 def _normalize_claims(data: dict, query: str) -> list[FactCheckEvidence]:
     evidence: list[FactCheckEvidence] = []
     for claim in data.get("claims") or []:
-        for review in claim.get("review") or []:
+        for review in claim.get("claimReview") or []:  # exact API key (claims#Claim)
             url = review.get("url")
             if not url:  # review_url is required and the dedupe key; skip malformed entry
                 continue

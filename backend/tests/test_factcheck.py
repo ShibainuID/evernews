@@ -36,7 +36,8 @@ def _review(
 
 
 def _claim(text="Claim text", claimant="Someone", reviews=None, **extra):
-    claim = {"text": text, "claimant": claimant, "review": reviews or [_review()]}
+    # Real API shape (rest/v1alpha1/claims#Claim): reviews live under claimReview.
+    claim = {"text": text, "claimant": claimant, "claimReview": reviews or [_review()]}
     claim.update(extra)
     return claim
 
