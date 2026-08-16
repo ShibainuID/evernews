@@ -2,7 +2,7 @@
 description: Researches external web evidence for media verification claims using web search and page retrieval. Never gives the final misinformation verdict.
 mode: subagent
 temperature: 0.1
-steps: 8
+steps: 4
 permission:
   websearch: allow
   webfetch: allow

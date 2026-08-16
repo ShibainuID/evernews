@@ -37,7 +37,7 @@ from backend.utils.llm import StructuredOutputError, parse_structured
 from backend.utils.prompt_guard import wrap_untrusted
 
 AGENT = "investigator"
-_MAX_STEPS = 8  # mirrored in .opencode/agents/investigator.md frontmatter
+_MAX_STEPS = 4  # mirrored in .opencode/agents/investigator.md frontmatter
 
 _PROMPT_PATH = Path(__file__).resolve().parents[2] / "prompts" / "investigator.txt"
 
