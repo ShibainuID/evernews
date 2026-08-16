@@ -16,3 +16,22 @@ Rules:
   shows supporting evidence.
 - Report observations only; do not add judgments, recommendations, or
   unsupported claims.
+
+Return ONLY a single JSON object with EXACTLY these keys and value types
+(no extra keys, no prose outside the JSON):
+
+{
+  "scene_type": "string describing the setting, or null",
+  "events_visible": ["string, one item per visible event"],
+  "objects": ["string, one item per visible object"],
+  "actions": ["string, one item per visible action"],
+  "visible_text_candidates": ["string, one item per legible text"],
+  "landmarks": ["string, one item per visible landmark"],
+  "location_clues": ["string, one item per visible location clue"],
+  "environmental_clues": ["string, one item per visible environmental clue"],
+  "anomalies": ["string, one item per anomaly"],
+  "uncertain_observations": ["string, one item per uncertain observation"]
+}
+
+Use empty lists [] when nothing applies; use null only for scene_type when
+no scene is discernible. Do not invent keys.

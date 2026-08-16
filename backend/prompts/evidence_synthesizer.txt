@@ -32,4 +32,18 @@ Rules:
 - If data is missing, output null/unknown.
 - Cite only evidence IDs listed above. Never invent an ID.
 - When the finding is supported, contradicted, or mixed, at least one supporting or contradicting evidence ID is required.
-- Return JSON matching the requested schema only.
+- Return ONLY a single JSON object with EXACTLY these keys and value types (no extra keys, no prose outside the JSON, no markdown fences):
+
+{{
+  "event_web_finding": "supported" | "contradicted" | "mixed" | "insufficient",
+  "synthesis_summary": "string summarizing the synthesis in 2-3 sentences",
+  "existing_fact_checks_found": true or false,
+  "best_visual_source_id": "source id from the ranked list, or null",
+  "supporting_evidence_ids": ["evidence id, one per supporting finding"],
+  "contradicting_evidence_ids": ["evidence id, one per contradicting finding"],
+  "conflicts": ["string, one per retained conflict"],
+  "unresolved": ["string, one per unresolved gap"]
+}}
+
+Use "insufficient" only when no reliable finding can be made. Use []
+and null for empty values. Cite only evidence IDs listed above.
