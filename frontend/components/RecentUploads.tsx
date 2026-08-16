@@ -3,15 +3,14 @@
 const RECENT = [
   { title: "Sari Roti Zionist Allegations", image: "/recent/sari-roti.jpg" },
   { title: "Aqua's Water Origin Questioned", image: "/recent/aqua-water.jpg" },
-  { title: "Student with Pink iPad Controversy", image: "/recent/pink-ipad.jpg" },
   { title: "Taxi and KRL Crash", image: "/recent/krl-crash.jpg" },
 ];
 
 export function RecentUploads() {
   return (
-    <section className="mx-4 mt-4 rounded-card bg-brand-panel p-5">
+    <section className="rounded-card bg-brand-panel p-5">
       <h2 className="text-xl font-bold text-white">Your recent uploads and traces</h2>
-      <div className="mt-4 flex justify-center gap-3 overflow-x-auto pb-1">
+      <div className="mt-4 flex gap-3 overflow-x-auto pb-1">
         {RECENT.map((item) => (
           <div key={item.title} className="relative h-[205px] w-[115px] shrink-0 overflow-hidden rounded-card">
             {/* eslint-disable-next-line @next/next/no-img-element */}

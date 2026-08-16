@@ -47,6 +47,7 @@ export interface VerificationResult {
   verification_id: string;
   classification: ResultClassification;
   evidence_confidence: "low" | "medium" | "high";
+  confidence_score: number | null;
   source_context: SourceContext | null;
   comparison: ContextComparison;
   visual_match: VisualMatchLabel;
