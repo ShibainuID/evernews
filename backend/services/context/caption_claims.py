@@ -18,7 +18,13 @@ from datetime import date, datetime
 from backend.schemas.context import VideoContext
 from backend.schemas.evidence import ContextClaim, EvidenceAtom, EvidenceType, KeyframeRef
 from backend.utils.dates import resolve_relative_date
-from backend.utils.text import _EVENT_CANONICAL, _LOCATION_ALIASES, _LOCATION_PARENTS
+from backend.utils.text import (
+    _EVENT_CANONICAL,
+    _LOCATION_ALIASES,
+    _LOCATION_PARENTS,
+    LocationRelation,
+    location_relation,
+)
 
 _ISO_DATE_RE = re.compile(r"\b(\d{4}-\d{2}-\d{2})\b")
 _KNOWN_LOCATIONS = {
@@ -27,13 +33,20 @@ _KNOWN_LOCATIONS = {
     *_LOCATION_PARENTS.values(),
 }
 
+# Extraction-only extras: words worth pulling out of a caption that the
+# comparator's own dictionary deliberately doesn't "recognize" (that
+# dictionary gates a semantic-fallback path — see its tests — so it must
+# stay flood-only). An unrecognized event/location still compares correctly
+# by exact string match; this just widens what caption text we can find.
+_EXTRACTABLE_EVENTS = {**_EVENT_CANONICAL, "protest": "protest", "unjuk rasa": "protest"}
+
 
 def _unresolved() -> ContextClaim:
     return ContextClaim(value=None, normalized_value=None, confidence=0.0, evidence_ids=[], explicitly_claimed=False)
 
 
 def _find_event(caption_lc: str) -> str | None:
-    return next((canon for synonym, canon in _EVENT_CANONICAL.items() if synonym in caption_lc), None)
+    return next((canon for synonym, canon in _EXTRACTABLE_EVENTS.items() if synonym in caption_lc), None)
 
 
 def _find_location(caption_lc: str) -> str | None:
@@ -49,6 +62,29 @@ def _find_date_token(caption_lc: str) -> str | None:
         if token in caption_lc:
             return token
     return None
+
+
+def has_internal_conflict(caption: str | None) -> bool:
+    """True when the caption names two different recognized events, or two
+    non-compatible recognized locations, within itself.
+
+    ponytail: this is a caption-only proxy for the "textual conflict" signal
+    — we have no second independent text source (OCR/speech/fact-check) to
+    cross-check yet, so the only deterministic conflict this endpoint can
+    see is the caption contradicting itself (e.g. naming both Jakarta and
+    Bangkok for the same clip). Swap for real cross-source checking once
+    OCR/speech/fact-check are wired into this endpoint.
+    """
+    caption_lc = (caption or "").lower()
+    events = {canon for synonym, canon in _EXTRACTABLE_EVENTS.items() if synonym in caption_lc}
+    if len(events) > 1:
+        return True
+    found_locations = list(dict.fromkeys(name for name in _KNOWN_LOCATIONS if name in caption_lc))
+    return any(
+        location_relation(a, b) is LocationRelation.MISMATCH
+        for i, a in enumerate(found_locations)
+        for b in found_locations[i + 1 :]
+    )
 
 
 def extract_claims(ver_id: str, caption: str, keyframes: list[KeyframeRef], now: date | datetime) -> VideoContext:
