@@ -28,7 +28,7 @@ export default function RootLayout({
   return (
     <html lang="en" className={`${inter.variable} ${jakarta.variable}`}>
       <body className="font-sans text-black">
-        <div className="mx-auto flex min-h-screen w-full max-w-[480px] flex-col pb-[env(safe-area-inset-bottom)] pt-[env(safe-area-inset-top)] sm:my-10 sm:min-h-0 sm:overflow-hidden sm:rounded-[2rem] sm:border sm:border-black/10 sm:pb-0 sm:pt-0 sm:shadow-[0_30px_60px_-15px_rgba(1,51,161,0.25)]">
+        <div className="mx-auto flex min-h-screen w-full max-w-[480px] flex-col pb-[env(safe-area-inset-bottom)] pt-[env(safe-area-inset-top)] sm:max-w-xl lg:max-w-2xl xl:max-w-3xl">
           {children}
         </div>
       </body>
