@@ -1,190 +1,197 @@
-"""Verification endpoint: upload + caption -> VerificationResult.
+"""T36: verification API endpoints (producer/consumer) + background wiring.
 
-Demo-scope pipeline wired from already-tested building blocks: ingest (T18),
-keyframes (T20), the committed demo source index (T27), the deterministic
-comparator/classifier/confidence (T15-T17). Claim extraction uses
-``caption_claims`` (keyword-based) rather than the full Luna context fuser —
-see that module's docstring for the upgrade path. Runs synchronously: every
-step here is local and fast enough that the frontend's "analyzing" animation
-covers the real latency without a job-status endpoint.
+``POST /api/v1/verification`` is the trust boundary: the multipart upload is
+validated synchronously by the T18 ingestor (bounded size, MP4 magic,
+ffprobe duration) with a generated ``ver_<uuid4>`` id — a client filename can
+never become a path, shell argument, or artifact key — and only then is the
+pipeline scheduled via ``BackgroundTasks``. Pollers read the T35 state
+store; the completed ``VerificationResult`` is served once, never fabricated.
+``GET /{id}/debug`` is development-only and returns the verification's own
+workdir artifacts plus JSON-safe summaries of the completed result; the T35
+pipeline does not persist plan/bundle, so those are reported unavailable
+rather than invented.
 """
 
-import mimetypes
-from datetime import datetime, timezone
+import logging
 from pathlib import Path
 
-from fastapi import APIRouter, Form, HTTPException, UploadFile
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Request,
+    UploadFile,
+)
 
+from backend import state as state_module
 from backend.config import Settings
-from backend.schemas.evidence import ComparisonStatus, KeyframeRef
-from backend.schemas.result import SourceContext, VerificationResult
-from backend.services.context.caption_claims import extract_claims, has_internal_conflict
-from backend.services.evidence.classification import classify
-from backend.services.evidence.comparator import compare
-from backend.services.evidence.confidence import evidence_confidence
-from backend.services.evidence.demo_index import DemoIndex
-from backend.services.evidence.normalizer import match_strength
-from backend.services.evidence.source_ranker import rank
+from backend.schemas.result import VerificationResult
+from backend.services import pipeline
 from backend.services.ingestion.video_ingestor import (
-    InvalidVideoError,
     IngestionError,
-    UploadTooLargeError,
+    MediaProbeUnavailableError,
     new_verification_id,
     save_upload,
 )
-from backend.services.preprocessing.ffmpeg import PreprocessingError
-from backend.services.preprocessing.keyframes import select_keyframes
+from backend.services.validation.cache import query_cache
+from backend.state import STATUS_COMPLETED, STATUS_FAILED, STATUS_PROCESSING
 
-router = APIRouter(prefix="/api/v1")
-
-_MANIPULATION_LABEL = "False Context"
-
-# Friendly, non-technical copy for the reject paths the brief calls out
-# explicitly ("without it feeling like an error message from a machine").
-_FRIENDLY_UPLOAD_ERRORS: dict[type[Exception], str] = {
-    InvalidVideoError: "That doesn't look like a clip we can read — try a short MP4 video, or a photo, instead.",
-    UploadTooLargeError: "That's a bit too big for us to check right now — try a shorter clip or a smaller photo.",
-}
+router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
-def _friendly_upload_error(exc: Exception) -> str:
-    for exc_type, message in _FRIENDLY_UPLOAD_ERRORS.items():
-        if isinstance(exc, exc_type):
-            return message
-    return "We couldn't process that upload — mind trying again?"
+def get_providers() -> pipeline.Providers:
+    """Production provider bundle (T21 adapters, all lazy: no model load or
+    network at construction). Tests override this dependency with fakes.
 
-
-def _save_image(file: UploadFile, ver_id: str, settings: Settings) -> KeyframeRef:
-    """A single uploaded photo, treated as its own one-frame "clip".
-
-    No ffmpeg/ffprobe involved: a still image needs no scene detection, it
-    already is the one keyframe. Same bounded-write and size-limit discipline
-    as ``video_ingestor.save_upload``.
+    The T39 demo query-cache singleton rides on the bundle: every production
+    verification reuses cached provider results for identical queries/frames
+    (24h TTL, process-local), making repeated demo runs fast and identical.
     """
-    ext = mimetypes.guess_extension(file.content_type or "") or ".jpg"
-    dest_dir = Path(settings.workdir) / ver_id
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    dest = dest_dir / f"image{ext}"
-    max_bytes = settings.max_video_size_mb * 1024 * 1024
-    total = 0
-    with dest.open("wb") as out:
-        while chunk := file.file.read(1024 * 1024):
-            total += len(chunk)
-            if total > max_bytes:
-                dest.unlink(missing_ok=True)
-                raise UploadTooLargeError(f"upload exceeds MAX_VIDEO_SIZE_MB={settings.max_video_size_mb}")
-            out.write(chunk)
-    return KeyframeRef(
-        frame_id=f"{ver_id}_kf000",
-        timestamp_sec=0.0,
-        local_path=str(dest),
-        selection_reason="single uploaded photo, no keyframe extraction needed",
+    from backend.providers.google_vision import GoogleVisionProvider
+    from backend.providers.luna import OpenCodeGoLunaProvider
+    from backend.providers.opencode import OpenCodeResearchProvider
+    from backend.providers.paddleocr import PaddleOCRProvider
+    from backend.providers.whisper import FasterWhisperSpeechProvider
+
+    return pipeline.Providers(
+        speech=FasterWhisperSpeechProvider(),
+        ocr=PaddleOCRProvider(),
+        luna=OpenCodeGoLunaProvider(),
+        vision=GoogleVisionProvider(),
+        web_research=OpenCodeResearchProvider(),
+        cache=query_cache,
     )
 
 
-def _source_context(candidate) -> SourceContext:
-    return SourceContext(
-        event=candidate.event,
-        location=candidate.location,
-        date=candidate.time_context or candidate.published_at,
-        publisher=candidate.publisher,
-        source_url=candidate.url,
-        title=candidate.title,
+def _settings(request: Request) -> Settings:
+    return request.app.state.settings
+
+
+def _unknown(ver_id: str) -> HTTPException:
+    return HTTPException(status_code=404, detail=f"unknown verification id {ver_id!r}")
+
+
+def _mark_failed(ver_id: str, error: str) -> None:
+    state_module.store.update(
+        ver_id, status=STATUS_FAILED, stage="failed", progress=1.0, error=error
     )
 
 
-def _headline(classification: str) -> str:
-    return {
-        "possible_false_context": "Possible Context Change",
-        "context_consistent_with_source": "Context Checks Out",
-        "claim_conflict_found": "Claim Doesn't Match What We Found",
-        "source_match_with_incomplete_context": "Footage Match Found, Context Incomplete",
-        "insufficient_evidence": "We're Not Sure Yet",
-    }[classification]
-
-
-def _summary(classification: str, comparison, source: SourceContext | None) -> str:
-    if source is None:
-        return "We couldn't find a confident earlier match for this footage, so there's nothing to compare it against yet."
-    mismatches = [
-        dim for dim, comp in (("event", comparison.event), ("location", comparison.location), ("date", comparison.date))
-        if comp.status is ComparisonStatus.MISMATCH
-    ]
-    if mismatches:
-        return (
-            f"The footage matches a source published by {source.publisher or 'an earlier source'} "
-            f"about {source.event or 'a different event'} in {source.location or 'a different place'} "
-            f"({source.date or 'an earlier date'}). The current clip's {', '.join(mismatches)} "
-            "doesn't line up with that earlier version."
-        )
-    return "The footage matches an earlier source and the event, location, and date all line up."
-
-
-def _manipulation_types(classification: str) -> list[str]:
-    return [_MANIPULATION_LABEL] if classification == "possible_false_context" else []
-
-
-@router.post("/verifications", response_model=VerificationResult)
-async def create_verification(video: UploadFile, caption: str = Form(default="")) -> VerificationResult:
-    settings = Settings()
+@router.post("", status_code=202)
+async def create_verification(
+    request: Request,
+    video: UploadFile = File(...),
+    caption: str = Form(""),
+    source_url: str | None = Form(None),
+    background_tasks: BackgroundTasks = BackgroundTasks(),
+    providers: pipeline.Providers = Depends(get_providers),
+) -> dict[str, str]:
+    """Accept a validated upload and schedule the pipeline; never hold it."""
+    settings = _settings(request)
     ver_id = new_verification_id()
-    now = datetime.now(timezone.utc)
-
-    is_image = (video.content_type or "").startswith("image/")
     try:
-        if is_image:
-            keyframes = [_save_image(video, ver_id, settings)]
-        else:
-            video_path = save_upload(video.file, ver_id, settings)
-            keyframes = select_keyframes(video_path, ver_id, settings)
-    except (IngestionError, PreprocessingError) as exc:
-        raise HTTPException(status_code=422, detail=_friendly_upload_error(exc)) from exc
-
-    context = extract_claims(ver_id, caption, keyframes, now)
-
-    try:
-        candidates = DemoIndex().search([kf.local_path for kf in keyframes])
-    except FileNotFoundError:
-        candidates = []  # ponytail: index not built yet (`python -m backend.scripts.index_demo_sources`)
-    ranked = rank(candidates, now) if candidates else []
-    top = ranked[0] if ranked else None
-
-    source_context = _source_context(top) if top is not None else None
-    comparison = compare(context, source_context)
-    visual_match = match_strength(top.match_types[0]) if top is not None and top.match_types else "unknown"
-
-    source_complete = bool(top and top.event and top.location and (top.time_context or top.published_at))
-    classification = classify(
-        visual_match=visual_match,
-        comparison=comparison,
-        has_textual_conflict=has_internal_conflict(caption),
-        source_context_complete=source_complete,
+        video_path = save_upload(video.file, ver_id, settings)
+    except IngestionError as exc:
+        # trust-boundary reject: no state entry, no background job
+        status_code = 503 if isinstance(exc, MediaProbeUnavailableError) else 400
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+    state_module.store.create(ver_id)
+    verification_request = pipeline.VerificationRequest(
+        video_path=video_path,
+        caption=caption,
+        # accepted but ignored unless the feature flag is on (design §10)
+        source_url=source_url if settings.enable_url_input else None,
     )
+    background_tasks.add_task(
+        _run_background, ver_id, verification_request, providers, settings
+    )
+    return {"verification_id": ver_id, "status": STATUS_PROCESSING}
 
-    confidence_components = {
-        "visual": {"high": 1.0, "medium": 0.7, "low": 0.4, "unknown": 0.0}[visual_match],
-        "metadata": top.metadata_completeness if top else 0.0,
-        "source_quality": top.source_quality if top else 0.0,
+
+async def _run_background(
+    ver_id: str,
+    verification_request: pipeline.VerificationRequest,
+    providers: pipeline.Providers,
+    settings: Settings,
+) -> None:
+    """run_verification behind the response; it marks state failed itself."""
+    try:
+        await pipeline.run_verification(ver_id, verification_request, providers, settings)
+    except Exception:  # noqa: BLE001 - state already reflects the failure
+        logger.exception("verification %s failed", ver_id)
+
+
+@router.get("/{ver_id}")
+def get_status(ver_id: str, request: Request) -> dict:
+    """Current state: status, stage, progress, error (T35 state store)."""
+    state = state_module.store.get(ver_id)
+    if state is None:
+        raise _unknown(ver_id)
+    return {
+        "verification_id": state.ver_id,
+        "status": state.status,
+        "stage": state.stage,
+        "progress": state.progress,
+        "error": state.error,
     }
 
-    strongest_ids = [
-        *context.event.evidence_ids, *context.location.evidence_ids, *context.time.evidence_ids,
-    ]
 
-    return VerificationResult(
-        verification_id=ver_id,
-        classification=classification,
-        evidence_confidence=evidence_confidence(confidence_components),
-        confidence_score=round(sum(confidence_components.values()) / len(confidence_components) * 100),
-        current_context=context,
-        source_context=source_context,
-        comparison=comparison,
-        visual_match=visual_match,
-        headline=_headline(classification.value),
-        summary=_summary(classification.value, comparison, source_context),
-        manipulation_types=_manipulation_types(classification.value),
-        strongest_evidence_ids=list(dict.fromkeys(strongest_ids)),
-        sources=ranked,
-        unresolved=context.unresolved,
-        warnings=[],
-    )
+@router.get("/{ver_id}/result")
+def get_result(ver_id: str) -> VerificationResult:
+    """The completed ``VerificationResult``; never a partial/fabricated one."""
+    state = state_module.store.get(ver_id)
+    if state is None:
+        raise _unknown(ver_id)
+    if state.status != STATUS_COMPLETED or state.result is None:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "verification_id": state.ver_id,
+                "status": state.status,
+                "stage": state.stage,
+                "progress": state.progress,
+                "error": state.error,
+                "message": "verification has not completed; no result is available",
+            },
+        )
+    return state.result
+
+
+@router.get("/{ver_id}/debug")
+def get_debug(ver_id: str, request: Request) -> dict:
+    """Development-only diagnostics: own workdir artifacts + result summaries."""
+    if _settings(request).app_env != "development":
+        raise HTTPException(status_code=404, detail="debug endpoint disabled")
+    state = state_module.store.get(ver_id)
+    if state is None:
+        raise _unknown(ver_id)
+
+    work_dir = Path(_settings(request).workdir) / ver_id
+    artifacts = []
+    if work_dir.is_dir():
+        for path in sorted(work_dir.rglob("*")):
+            if path.is_file():
+                artifacts.append(
+                    {
+                        "name": str(path.relative_to(work_dir)),
+                        "size_bytes": path.stat().st_size,
+                        "modified_epoch": round(path.stat().st_mtime, 3),
+                    }
+                )
+
+    result = state.result
+    return {
+        "verification_id": state.ver_id,
+        "status": state.status,
+        "stage": state.stage,
+        "progress": state.progress,
+        "artifacts": artifacts,
+        "context": result.current_context.model_dump() if result is not None else None,
+        "comparison": result.comparison.model_dump() if result is not None else None,
+        "plan": state.plan,
+        "bundle": state.bundle,
+    }

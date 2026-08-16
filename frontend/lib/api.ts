@@ -1,4 +1,5 @@
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
+const VERIFICATION_PATH = `${API_BASE}/api/v1/verification`;
 
 export type ComparisonStatus = "consistent" | "mismatch" | "unknown";
 export type VisualMatchLabel = "high" | "medium" | "low" | "unknown";
@@ -59,21 +60,94 @@ export interface VerificationResult {
   warnings: string[];
 }
 
+// Mirrors backend/state.py's STAGES tuple — real pipeline stages, not a
+// fixed animation timer.
+export type VerificationStage =
+  | "queued"
+  | "preprocessing"
+  | "extracting_context"
+  | "planning_investigation"
+  | "fact_check_search"
+  | "web_research"
+  | "visual_source_search"
+  | "synthesizing_evidence"
+  | "comparing_context"
+  | "completed"
+  | "failed";
+
+export interface VerificationStatus {
+  verification_id: string;
+  status: "processing" | "completed" | "failed";
+  stage: VerificationStage;
+  progress: number;
+  error: string | null;
+}
+
 export class VerificationError extends Error {
   constructor(message: string, readonly status: number) {
     super(message);
   }
 }
 
-export async function submitVerification(file: File, caption: string): Promise<VerificationResult> {
+async function readErrorDetail(res: Response, fallback: string): Promise<string> {
+  const body = await res.json().catch(() => null);
+  const detail = body?.detail;
+  if (typeof detail === "string") return detail;
+  if (detail && typeof detail.message === "string") return detail.message;
+  return fallback;
+}
+
+/** Kicks off a verification job; returns immediately with its id (202). */
+export async function startVerification(file: File, caption: string): Promise<{ verification_id: string }> {
   const body = new FormData();
   body.append("video", file);
   body.append("caption", caption);
 
-  const res = await fetch(`${API_BASE}/api/v1/verifications`, { method: "POST", body });
+  const res = await fetch(VERIFICATION_PATH, { method: "POST", body });
   if (!res.ok) {
-    const detail = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new VerificationError(detail.detail ?? "Something went wrong while tracing that clip.", res.status);
+    throw new VerificationError(await readErrorDetail(res, "That clip didn't make it through — try again."), res.status);
   }
   return res.json();
+}
+
+export async function getVerificationStatus(id: string): Promise<VerificationStatus> {
+  const res = await fetch(`${VERIFICATION_PATH}/${id}`);
+  if (!res.ok) {
+    throw new VerificationError(await readErrorDetail(res, "Lost track of that verification — try again."), res.status);
+  }
+  return res.json();
+}
+
+export async function getVerificationResult(id: string): Promise<VerificationResult> {
+  const res = await fetch(`${VERIFICATION_PATH}/${id}/result`);
+  if (!res.ok) {
+    throw new VerificationError(await readErrorDetail(res, "That clip didn't make it through — try again."), res.status);
+  }
+  return res.json();
+}
+
+const POLL_INTERVAL_MS = 1200;
+const POLL_TIMEOUT_MS = 120_000;
+
+/** Starts a verification job and polls until it completes or fails. */
+export async function submitVerification(
+  file: File,
+  caption: string,
+  onStage?: (stage: VerificationStage) => void,
+): Promise<VerificationResult> {
+  const { verification_id } = await startVerification(file, caption);
+  const deadline = Date.now() + POLL_TIMEOUT_MS;
+
+  while (Date.now() < deadline) {
+    const status = await getVerificationStatus(verification_id);
+    onStage?.(status.stage);
+    if (status.status === "completed") {
+      return getVerificationResult(verification_id);
+    }
+    if (status.status === "failed") {
+      throw new VerificationError(status.error ?? "That clip didn't make it through — try again.", 500);
+    }
+    await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+  }
+  throw new VerificationError("This is taking longer than expected — try again in a bit.", 504);
 }

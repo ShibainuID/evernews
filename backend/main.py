@@ -44,7 +44,7 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
     app.include_router(health_router)
-    app.include_router(verification_router)
+    app.include_router(verification_router, prefix="/api/v1/verification")
     return app
 
 

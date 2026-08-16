@@ -18,12 +18,19 @@ The orchestrator is provider-agnostic: the branch dependencies (``run_fact_check
 / ``investigate`` / ``run_visual`` / ``demo_index``) are injected; production
 defaults are wired lazily in ``_default_runners`` so importing this module
 never touches concrete providers, ``Settings``, or the demo index file.
+
+The T39 demo query cache is an opt-in seam: ``execute(..., cache=query_cache)``
+wraps the branch runners so repeated same-key calls skip the provider (24h
+TTL, success-only entries, per-origin keys). ``cache=None`` (default) runs
+with no caching at all, preserving the pre-cache behavior byte for byte.
 """
 
 import asyncio
+import time
 from typing import Any, Awaitable, Callable, Sequence, cast
 
 from backend.schemas.context import VideoContext
+from backend.schemas.evidence import KeyframeRef
 from backend.schemas.investigation import (
     FactCheckEvidence,
     FactCheckTask,
@@ -35,6 +42,13 @@ from backend.schemas.investigation import (
     WebResearchTask,
 )
 from backend.schemas.result import SourceCandidate
+from backend.services.validation.cache import (
+    QueryCache,
+    fact_check_key,
+    frame_key_from_path,
+    web_research_key,
+)
+from backend.utils.observability import log_event
 
 # Branch budgets (HANDOFF §11.2). Module-level so tests can shorten them.
 FACT_CHECK_TIMEOUT_SEC = 15.0
@@ -56,6 +70,113 @@ def _error_text(exc: BaseException) -> str:
     return detail or type(exc).__name__
 
 
+def _cached_fact(runner: FactRunner, cache: QueryCache | None) -> FactRunner:
+    """Cache seam: ``fc:{query}:{lang}`` keys, per-query partitions.
+
+    Any miss runs the provider with the full task (provider protocol and
+    dedupe scope unchanged); the returned evidence is then partitioned by
+    ``query`` and cached under every (query, lang) key of the task. Only a
+    successful return populates the cache — a raised provider error retries
+    on the next execution.
+    """
+
+    async def _run(task: FactCheckTask) -> list[FactCheckEvidence]:
+        assert cache is not None  # this closure exists only when cache is provided
+        languages = task.language_codes or [""]
+        keys = [fact_check_key(q, lang) for q in task.queries for lang in languages]
+        cached = [cache.get(k) for k in keys]
+        if cached and all(value is not None for value in cached):
+            return [
+                evidence for value in cached if value is not None for evidence in value
+            ]
+        evidence = await runner(task)
+        # ponytail: evidence carries no language field, so partitions are per
+        # query; keys stay per (query, lang). Fine for the demo, revisit if
+        # per-language partitioning ever matters.
+        for query in task.queries:
+            partition = [e for e in evidence if e.query == query]
+            for lang in languages:
+                cache.set(fact_check_key(query, lang), partition)
+        return evidence
+
+    return runner if cache is None else _run
+
+
+def _cached_web(runner: WebRunner, cache: QueryCache | None) -> WebRunner:
+    """Cache seam: one whole-task ``web:{task_id}:{question}`` key."""
+
+    async def _run(task: WebResearchTask) -> WebResearchResult:
+        assert cache is not None  # this closure exists only when cache is provided
+        key = web_research_key(task.task_id, task.question)
+        cached = cache.get(key)
+        if cached is not None:
+            return cached
+        result = await runner(task)
+        cache.set(key, result)  # success only; a raised error retries next run
+        return result
+
+    return runner if cache is None else _run
+
+
+def _cached_visual(
+    runner: VisualRunner, cache: QueryCache | None, keyframes: list[KeyframeRef]
+) -> VisualRunner:
+    """Cache seam: per-frame ``vis:{frame_hash}`` keys with task narrowing.
+
+    All-miss runs the runner with the full task (current behavior); when some
+    frames are already cached the task is narrowed to the uncached frames
+    only, and fresh candidates are partitioned by ``frame_id`` and cached per
+    frame. Missing/unreadable frames have no key and always reach the runner.
+    Cached partitions merge back in ``task.frame_ids`` order, matching a full
+    run's output order.
+    """
+
+    async def _run(task: VisualSearchTask) -> list[VisualWebCandidate]:
+        assert cache is not None  # this closure exists only when cache is provided
+        if not task.frame_ids:
+            return await runner(task)
+        frame_keys: list[tuple[str, str | None]] = []
+        by_id = {keyframe.frame_id: keyframe for keyframe in keyframes}
+        for frame_id in task.frame_ids:
+            keyframe = by_id.get(frame_id)
+            if keyframe is None:
+                frame_keys.append((frame_id, None))
+                continue
+            frame_keys.append(
+                (frame_id, await asyncio.to_thread(frame_key_from_path, keyframe.local_path))
+            )
+        cached = [(fid, cache.get(key) if key is not None else None) for fid, key in frame_keys]
+        if all(value is not None for _, value in cached):
+            return [
+                candidate
+                for _, value in cached
+                if value is not None
+                for candidate in value
+            ]
+        missing = [fid for fid, value in cached if value is None]
+        narrowed = (
+            task
+            if len(missing) == len(task.frame_ids)
+            else task.model_copy(update={"frame_ids": missing})
+        )
+        candidates = await runner(narrowed)
+        fresh: dict[str, list[VisualWebCandidate]] = {}
+        for frame_id in missing:
+            fresh[frame_id] = [c for c in candidates if c.frame_id == frame_id]
+        for frame_id, key in frame_keys:
+            if key is not None and frame_id in fresh:
+                cache.set(key, fresh[frame_id])
+        # ponytail: partitions of a deduped merged run; a frame-subset rerun
+        # can miss URLs deduped across frames — recompute raw per-frame runs
+        # if that ever matters.
+        merged: list[VisualWebCandidate] = []
+        for frame_id, value in cached:
+            merged.extend(value if value is not None else fresh.get(frame_id, []))
+        return merged
+
+    return runner if cache is None else _run
+
+
 def _insufficient_web(task: WebResearchTask, error: BaseException) -> WebResearchResult:
     """A failed/timed-out web task becomes an explicit incomplete result."""
     return WebResearchResult(
@@ -72,15 +193,26 @@ def _insufficient_web(task: WebResearchTask, error: BaseException) -> WebResearc
 
 async def _run_group(
     runners: Sequence[tuple[Callable[..., Awaitable[Any]], Any]], timeout_sec: float
-) -> list[Any]:
-    """One outcome per (runner, task): the value or its exception — never raises."""
+) -> tuple[list[Any], float]:
+    """One outcome per (runner, task): the value or its exception — never raises.
+
+    Returns ``(outcomes, max_task_latency_ms)``: a group finishes when its
+    slowest task does, so the max task duration is the group's effective
+    wall-clock time (measured even on task failure).
+    """
+    durations: list[float] = []
 
     async def _bounded(runner, task):
-        return await asyncio.wait_for(runner(task), timeout=timeout_sec)
+        t0 = time.perf_counter()
+        try:
+            return await asyncio.wait_for(runner(task), timeout=timeout_sec)
+        finally:
+            durations.append((time.perf_counter() - t0) * 1000)
 
-    return await asyncio.gather(
+    outcomes = await asyncio.gather(
         *(_bounded(runner, task) for runner, task in runners), return_exceptions=True
     )
+    return outcomes, round(max(durations, default=0.0), 3)
 
 
 def _fact_normalize(outcomes: list[Any]) -> tuple[list[FactCheckEvidence], str, list[str]]:
@@ -225,11 +357,22 @@ async def execute(
     investigate: WebRunner | None = None,
     run_visual: VisualRunner | None = None,
     demo_index: DemoSearch | None = None,
+    cache: QueryCache | None = None,
 ) -> RawValidationBundle:
-    """Plan -> RawValidationBundle: three concurrent branch groups, bounded tasks."""
+    """Plan -> RawValidationBundle: three concurrent branch groups, bounded tasks.
+
+    ``cache`` (T39) is the demo query-cache seam: when provided, successful
+    provider results are cached per key and repeated same-key calls skip the
+    provider. ``None`` (the default) runs exactly as before with no caching —
+    the process-local ``query_cache`` singleton is the intended demo wiring.
+    """
     run_fact_check, investigate, run_visual, demo_index = _default_runners(
         context, run_fact_check, investigate, run_visual, demo_index
     )
+
+    fact_runner = _cached_fact(run_fact_check, cache)
+    web_runner = _cached_web(investigate, cache)
+    visual_runner = _cached_visual(run_visual, cache, context.keyframes)
 
     web_tasks = plan.web_research_tasks[:MAX_WEB_TASKS]
     errors: list[str] = []
@@ -239,16 +382,27 @@ async def execute(
             f"(plan carried {len(plan.web_research_tasks)})."
         )
 
-    fact_outcomes, web_outcomes, visual_outcomes = cast(
-        tuple[list[Any], list[Any], list[Any]],
+    (
+        (fact_outcomes, fact_latency_ms),
+        (web_outcomes, web_latency_ms),
+        (
+            visual_outcomes,
+            visual_latency_ms,
+        ),
+    ) = cast(
+        tuple[
+            tuple[list[Any], float],
+            tuple[list[Any], float],
+            tuple[list[Any], float],
+        ],
         await asyncio.gather(
             _run_group(
-                [(run_fact_check, task) for task in plan.fact_check_tasks],
+                [(fact_runner, task) for task in plan.fact_check_tasks],
                 FACT_CHECK_TIMEOUT_SEC,
             ),
-            _run_group([(investigate, task) for task in web_tasks], WEB_TIMEOUT_SEC),
+            _run_group([(web_runner, task) for task in web_tasks], WEB_TIMEOUT_SEC),
             _run_group(
-                [(run_visual, task) for task in plan.visual_search_tasks],
+                [(visual_runner, task) for task in plan.visual_search_tasks],
                 VISUAL_TIMEOUT_SEC,
             ),
             return_exceptions=True,
@@ -259,6 +413,38 @@ async def execute(
     web_research, web_status, web_errors = _web_normalize(web_outcomes, web_tasks)
     visual_candidates, visual_status, visual_errors = await _visual_normalize(
         visual_outcomes, context, demo_index
+    )
+
+    # T37: one structured event per branch; branch status carries failure
+    # visibility (error / partial_failure / success_no_matches / demo_fallback).
+    log_event(
+        context.verification_id,
+        "fact_check_search",
+        "fact_check",
+        fact_latency_ms,
+        fact_status,
+        tasks=len(plan.fact_check_tasks),
+        evidence=len(fact_checks),
+    )
+    log_event(
+        context.verification_id,
+        "web_research",
+        "web_research",
+        web_latency_ms,
+        web_status,
+        tasks=len(web_tasks),
+        searches=sum(result.searches_used for result in web_research),
+        pages_fetched=sum(result.pages_fetched for result in web_research),
+    )
+    log_event(
+        context.verification_id,
+        "visual_source_search",
+        "visual",
+        visual_latency_ms,
+        visual_status,
+        tasks=len(plan.visual_search_tasks),
+        candidates=len(visual_candidates),
+        demo_fallback=visual_status == "demo_fallback",
     )
 
     return RawValidationBundle(

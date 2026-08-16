@@ -10,7 +10,6 @@ const EASE_OUT_EXPO = [0.16, 1, 0.3, 1] as const;
 
 export interface YourClipPreview {
   url: string;
-  isImage: boolean;
 }
 
 const PILL: Record<ResultClassification, { label: string; className: string }> = {
@@ -135,16 +134,11 @@ export function FindingsDetail({
             <p className="mt-1 text-center text-[10px] text-black/50">{source?.date ?? "Unknown date"}</p>
           </div>
           <div>
-            <p className="text-center text-xs font-semibold">Your {yourClip?.isImage ? "Photo" : "Video Clip"}</p>
+            <p className="text-center text-xs font-semibold">Your Video Clip</p>
             <ClipFrame>
-              {yourClip ? (
-                yourClip.isImage ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img src={yourClip.url} alt="" className="h-full w-full object-cover" />
-                ) : (
-                  <video src={yourClip.url} className="h-full w-full object-cover" muted playsInline loop autoPlay />
-                )
-              ) : null}
+              {yourClip && (
+                <video src={yourClip.url} className="h-full w-full object-cover" muted playsInline loop autoPlay />
+              )}
             </ClipFrame>
             <p className="mt-1 text-center text-[10px] text-black/50">Uploaded just now</p>
           </div>
