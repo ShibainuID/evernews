@@ -51,8 +51,11 @@ from backend.services.validation.cache import (
 from backend.utils.observability import log_event
 
 # Branch budgets (HANDOFF §11.2). Module-level so tests can shorten them.
+# WEB_TIMEOUT_SEC is a calibration knob: measured 82-120s wall time for real
+# investigator tasks on opencode-go (deepseek-v4-flash, 8 websearch/webfetch
+# steps, parallel sessions contend on one local server).
 FACT_CHECK_TIMEOUT_SEC = 15.0
-WEB_TIMEOUT_SEC = 60.0
+WEB_TIMEOUT_SEC = 150.0
 VISUAL_TIMEOUT_SEC = 18.0
 
 # Second line of defense after the planner's Settings cap (T31): a plan that

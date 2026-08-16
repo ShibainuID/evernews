@@ -560,4 +560,4 @@ async def test_every_branch_failure_normalized_never_raises():
 def test_default_timeouts_match_handoff_targets():
     assert orchestrator.FACT_CHECK_TIMEOUT_SEC == 15.0  # §11.2: 15s/task
     assert orchestrator.VISUAL_TIMEOUT_SEC == 18.0  # §11.2: 15-20s/frame
-    assert orchestrator.WEB_TIMEOUT_SEC == 60.0  # §11.2: 45-60s/task
+    assert orchestrator.WEB_TIMEOUT_SEC == 150.0  # §11.2: 45-60s/task; raised to 150s after measured 82-120s/task on opencode-go
