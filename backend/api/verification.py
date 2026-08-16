@@ -56,13 +56,16 @@ def get_providers() -> pipeline.Providers:
     from backend.providers.luna import OpenCodeGoLunaProvider
     from backend.providers.opencode import OpenCodeResearchProvider
     from backend.providers.paddleocr import PaddleOCRProvider
+    from backend.providers.serpapi import FallbackVisionProvider, SerpAPIVisionProvider
     from backend.providers.whisper import FasterWhisperSpeechProvider
 
     return pipeline.Providers(
         speech=FasterWhisperSpeechProvider(),
         ocr=PaddleOCRProvider(),
         luna=OpenCodeGoLunaProvider(),
-        vision=GoogleVisionProvider(),
+        vision=FallbackVisionProvider(
+            primary=GoogleVisionProvider(), fallback=SerpAPIVisionProvider()
+        ),
         web_research=OpenCodeResearchProvider(),
         cache=query_cache,
     )
