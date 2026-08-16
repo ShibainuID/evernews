@@ -291,11 +291,17 @@ export function HeroCard({
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0 }}
               transition={stageTransition}
-              className={`flex h-40 flex-col items-center justify-center gap-1 rounded-xl text-center text-white ${fill} ${REVEAL_BANNER[revealResult.classification].className}`}
+              className={`flex h-40 flex-col items-center justify-center gap-1 rounded-xl text-center text-white ${fill} ${
+                revealResult.confidence_score != null && revealResult.confidence_score >= 70
+                  ? "bg-mismatch"
+                  : REVEAL_BANNER[revealResult.classification].className
+              }`}
             >
               <p className="text-sm font-medium opacity-90">We have found:</p>
               <p className="px-4 text-xl font-extrabold tracking-tight">
-                {REVEAL_BANNER[revealResult.classification].label}
+                {revealResult.confidence_score != null && revealResult.confidence_score >= 70
+                  ? "LIKELY HOAX"
+                  : REVEAL_BANNER[revealResult.classification].label}
               </p>
             </motion.div>
           )}

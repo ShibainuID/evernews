@@ -64,6 +64,10 @@ const MIL_COPY: Record<string, { title: string; body: string }> = {
     title: "This is called False Context.",
     body: "False Context happens when authentic media is reused with information about a different time, location, or event. The footage itself isn't fabricated, but the story wrapped around it is.",
   },
+  "AI-Generated": {
+    title: "This media is reported as AI-generated.",
+    body: "Collected sources describe this media as generated or manipulated by artificial intelligence rather than as authentic footage of a real event. That means it cannot serve as evidence for whatever it claims to show.",
+  },
 };
 
 function ClipFrame({ children }: { children: React.ReactNode }) {
@@ -80,9 +84,16 @@ export function FindingsDetail({
   onReset: () => void;
 }) {
   const [copied, setCopied] = useState(false);
-  const pill = PILL[result.classification];
+  // At 70+ the controlled classification is overridden in presentation: the
+  // evidence-backed figure is strong enough to call it directly.
+  const pill =
+    result.confidence_score != null && result.confidence_score >= 70
+      ? { label: "LIKELY HOAX", className: "border-mismatch bg-mismatch text-white" }
+      : PILL[result.classification];
   const source = result.source_context;
-  const lesson = result.manipulation_types[0] ? MIL_COPY[result.manipulation_types[0]] : null;
+  const lesson = result.manipulation_types[0]
+    ? MIL_COPY[result.manipulation_types[0] === "ai_generated_media" ? "AI-Generated" : result.manipulation_types[0]]
+    : null;
   const reduceMotion = useReducedMotion();
 
   // Cards step in one after another rather than popping in as a block,
@@ -119,14 +130,15 @@ export function FindingsDetail({
         </div>
         {result.confidence_score != null && (
           <p className="mt-3 text-center text-sm font-bold">
-            Evernews Confidence Score: <span className="text-brand">{result.confidence_score}/100</span>
+            Likelihood this media is misleading:{" "}
+            <span className="text-brand">{result.confidence_score}%</span>
           </p>
         )}
         <p className="mt-3 text-sm leading-relaxed text-black/70">{result.summary}</p>
 
         <div className="mt-4 grid grid-cols-2 gap-3">
           <div>
-            <p className="text-center text-xs font-semibold">Original Video</p>
+            <p className="text-center text-xs font-semibold">Original Media</p>
             <ClipFrame>
               <div className="flex h-full items-center justify-center p-2 text-center text-[10px] text-black/40">
                 {source?.publisher ?? "No source found"}
@@ -135,7 +147,9 @@ export function FindingsDetail({
             <p className="mt-1 text-center text-[10px] text-black/50">{source?.date ?? "Unknown date"}</p>
           </div>
           <div>
-            <p className="text-center text-xs font-semibold">Your Video Clip</p>
+            <p className="text-center text-xs font-semibold">
+              {yourClip?.kind === "image" ? "Your Image" : "Your Video Clip"}
+            </p>
             <ClipFrame>
               {yourClip && yourClip.kind === "image" ? (
                 <img src={yourClip.url} alt="" className="h-full w-full object-contain" />
