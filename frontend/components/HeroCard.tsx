@@ -19,7 +19,7 @@ const EASE_OUT_EXPO = [0.16, 1, 0.3, 1] as const;
 type Stage = "idle" | "uploading" | "analyzing" | "reveal" | "done" | "error";
 
 // The headline "reveal" moment (Figma's MISMATCH step) shown briefly before
-// the full comparison detail — one banner per classification, never red for
+// the full comparison detail, with one banner per classification, never red for
 // a clean match.
 const REVEAL_BANNER: Record<ResultClassification, { label: string; className: string }> = {
   possible_false_context: { label: "POTENTIAL MISMATCH", className: "bg-mismatch" },
@@ -30,7 +30,7 @@ const REVEAL_BANNER: Record<ResultClassification, { label: string; className: st
 };
 const REVEAL_MS = 1400;
 
-// Real pipeline stages (backend/state.py), in human terms — not a fixed
+// Real pipeline stages (backend/state.py), in human terms, not a fixed
 // animation timer. "queued" covers the moment right after upload, before
 // the first status poll comes back.
 const STAGE_LABELS: Record<VerificationStage | "uploading", string> = {
@@ -54,7 +54,7 @@ export function HeroCard({
 }: {
   onResult: (result: VerificationResult | null, preview?: YourClipPreview) => void;
   /** Desktop only: stretch to match the sidebar's height instead of sitting
-   * short at the top. Pass this only while there's no findings card below —
+   * short at the top. Pass this only while there's no findings card below;
    * once one appears, the two of them together should set the row height. */
   fillHeight?: boolean;
 }) {
@@ -71,7 +71,7 @@ export function HeroCard({
   // HeroCard remounts (fresh `key`) on "Trace another clip" while this can
   // still be mid-flight (a poll loop pending). Without this guard the stale
   // instance's poll would fire anyway once it resolves and call
-  // onResult(oldResult) on the parent — silently resurrecting the findings
+  // onResult(oldResult) on the parent, silently resurrecting the findings
   // the user just reset.
   const mountedRef = useRef(true);
   useEffect(() => {
@@ -105,7 +105,7 @@ export function HeroCard({
       setStage("done");
     } catch (err) {
       if (!mountedRef.current) return;
-      const message = err instanceof VerificationError ? err.message : "That clip didn't make it through — try again.";
+      const message = err instanceof VerificationError ? err.message : "That clip didn't make it through, try again.";
       setError(message);
       onResult(null);
       setStage("error");

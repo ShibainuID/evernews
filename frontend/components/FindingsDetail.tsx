@@ -62,7 +62,7 @@ function DimensionRow({ label, dim }: { label: string; dim: DimensionComparison 
 const MIL_COPY: Record<string, { title: string; body: string }> = {
   "False Context": {
     title: "This is called False Context.",
-    body: "False Context happens when authentic media is reused with information about a different time, location, or event. The footage itself isn't fabricated — the story wrapped around it is.",
+    body: "False Context happens when authentic media is reused with information about a different time, location, or event. The footage itself isn't fabricated, but the story wrapped around it is.",
   },
 };
 
@@ -85,8 +85,8 @@ export function FindingsDetail({
   const lesson = result.manipulation_types[0] ? MIL_COPY[result.manipulation_types[0]] : null;
   const reduceMotion = useReducedMotion();
 
-  // Cards step in one after another rather than popping in as a block —
-  // the reveal should read as a sequence of findings, not a single flash.
+  // Cards step in one after another rather than popping in as a block,
+  // so the reveal reads as a sequence of findings, not a single flash.
   const container = {
     hidden: {},
     visible: { transition: { staggerChildren: reduceMotion ? 0 : 0.09, delayChildren: reduceMotion ? 0 : 0.05 } },
