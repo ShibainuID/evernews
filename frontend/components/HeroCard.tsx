@@ -12,7 +12,6 @@ import {
   type VerificationStage,
 } from "@/lib/api";
 import type { YourClipPreview } from "@/components/FindingsDetail";
-
 // One consistent, non-bouncy "step forward" feel for every stage change.
 const EASE_OUT_EXPO = [0.16, 1, 0.3, 1] as const;
 
@@ -60,7 +59,7 @@ export function HeroCard({
 }) {
   const [stage, setStage] = useState<Stage>("idle");
   const [stageLabel, setStageLabel] = useState(STAGE_LABELS.uploading);
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [preview, setPreview] = useState<YourClipPreview | null>(null);
   const [caption, setCaption] = useState("");
   const [link, setLink] = useState("");
   const [mode, setMode] = useState<"file" | "link">("file");
@@ -81,8 +80,9 @@ export function HeroCard({
   }, []);
 
   async function runVerification(source: VerificationSource) {
-    const preview = source.file ? URL.createObjectURL(source.file) : (source.videoUrl ?? null);
-    setPreviewUrl(preview);
+    const kind = source.file?.type.startsWith("image/") ? "image" : "video";
+    const previewUrl = source.file ? URL.createObjectURL(source.file) : (source.videoUrl ?? null);
+    setPreview(previewUrl ? { url: previewUrl, kind } : null);
     setError(null);
     setStage("uploading");
     setStageLabel(STAGE_LABELS.uploading);
@@ -98,7 +98,7 @@ export function HeroCard({
       setStage("reveal");
       await new Promise((r) => setTimeout(r, REVEAL_MS));
       if (!mountedRef.current) return;
-      onResult(result, preview ? { url: preview } : undefined);
+      onResult(result, previewUrl ? { url: previewUrl, kind } : undefined);
       setStage("done");
     } catch (err) {
       if (!mountedRef.current) return;
@@ -111,7 +111,7 @@ export function HeroCard({
 
   function reset() {
     setStage("idle");
-    setPreviewUrl(null);
+    setPreview(null);
     setCaption("");
     setLink("");
     setMode("file");
@@ -123,8 +123,8 @@ export function HeroCard({
   function handleFiles(files: FileList | null) {
     const picked = files?.[0];
     if (!picked) return;
-    if (!picked.type.startsWith("video/")) {
-      setError("That's not a video file — try a short clip instead.");
+    if (!picked.type.startsWith("video/") && !picked.type.startsWith("image/")) {
+      setError("That's not a video or image file — try a short clip instead.");
       setStage("error");
       return;
     }
@@ -200,12 +200,12 @@ export function HeroCard({
                     <span className="flex h-[70px] w-[70px] shrink-0 items-center justify-center rounded-2xl bg-black/5">
                       <Plus size={32} strokeWidth={1.5} />
                     </span>
-                    <span className="max-w-[240px]">Drop/paste the clip you want to trace here</span>
+                    <span className="max-w-[240px]">Drop/paste the clip or image you want to trace here</span>
                   </button>
                   <input
                     ref={inputRef}
                     type="file"
-                    accept="video/*"
+                    accept="video/*,image/*"
                     className="hidden"
                     onChange={(e) => handleFiles(e.target.files)}
                   />
@@ -253,8 +253,12 @@ export function HeroCard({
               transition={stageTransition}
               className={`flex flex-col items-center justify-center gap-2 ${stage === "uploading" ? "h-40" : ""} ${fill}`}
             >
-              {stage === "analyzing" && previewUrl && (
-                <video src={previewUrl} className="h-40 w-auto rounded-xl object-cover" muted playsInline autoPlay loop />
+              {stage === "analyzing" && preview && (
+                preview.kind === "image" ? (
+                  <img src={preview.url} alt="" className="h-40 w-auto rounded-xl object-contain" />
+                ) : (
+                  <video src={preview.url} className="h-40 w-auto rounded-xl object-cover" muted playsInline autoPlay loop />
+                )
               )}
               {stage === "uploading" && (
                 <div className="h-2 w-2/3 overflow-hidden rounded-full bg-black/10">

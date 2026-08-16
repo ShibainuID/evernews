@@ -10,6 +10,7 @@ const EASE_OUT_EXPO = [0.16, 1, 0.3, 1] as const;
 
 export interface YourClipPreview {
   url: string;
+  kind: "video" | "image";
 }
 
 const PILL: Record<ResultClassification, { label: string; className: string }> = {
@@ -136,8 +137,10 @@ export function FindingsDetail({
           <div>
             <p className="text-center text-xs font-semibold">Your Video Clip</p>
             <ClipFrame>
-              {yourClip && (
-                <video src={yourClip.url} className="h-full w-full object-cover" muted playsInline loop autoPlay />
+              {yourClip && yourClip.kind === "image" ? (
+                <img src={yourClip.url} alt="" className="h-full w-full object-contain" />
+              ) : (
+                yourClip && <video src={yourClip.url} className="h-full w-full object-cover" muted playsInline loop autoPlay />
               )}
             </ClipFrame>
             <p className="mt-1 text-center text-[10px] text-black/50">Uploaded just now</p>
