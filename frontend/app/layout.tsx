@@ -28,7 +28,10 @@ export default function RootLayout({
   return (
     <html lang="en" className={`${inter.variable} ${jakarta.variable}`}>
       <body className="font-sans text-black">
-        <div className="mx-auto flex min-h-screen w-full max-w-[480px] flex-col pb-[env(safe-area-inset-bottom)] pt-[env(safe-area-inset-top)] sm:max-w-xl lg:max-w-2xl xl:max-w-3xl">
+        {/* Below `lg` this stays a capped single column (phone-first); at
+            `lg`+ the cap lifts entirely and the page's own grid (see
+            page.tsx) takes over the full viewport width. */}
+        <div className="mx-auto flex min-h-screen w-full max-w-[480px] flex-col pb-[env(safe-area-inset-bottom)] pt-[env(safe-area-inset-top)] sm:max-w-xl md:max-w-2xl lg:max-w-none">
           {children}
         </div>
       </body>
