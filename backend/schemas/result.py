@@ -102,9 +102,9 @@ class VerificationResult(BaseModel):
     classification: ResultClassification
 
     evidence_confidence: ConfidenceLabel
-    # 0-100 display figure derived from the same internal component scores
-    # that produce `evidence_confidence`; presentation only, never a substitute
-    # for the controlled label
+    # 0-100 "likely misleading" display figure derived deterministically from
+    # the classification and comparison detail; presentation only, never a
+    # substitute for the controlled label
     confidence_score: int | None = None
 
     current_context: VideoContext

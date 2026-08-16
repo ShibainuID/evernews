@@ -23,7 +23,7 @@ from backend.schemas.result import (
     VisualMatchLabel,
 )
 from backend.services.evidence.classification import classify, has_material_mismatch
-from backend.services.evidence.confidence import evidence_confidence
+from backend.services.evidence.confidence import evidence_confidence, hoax_confidence
 
 # Single-module safe wording (§15.2/§43): never "Original source confirmed",
 # "First upload on the internet", "hoax", "fake", or any percentage.
@@ -62,6 +62,20 @@ RESULT_WORDING: dict[str, str] = {
 }
 
 _MANIPULATION_BY_DIMENSION = ("event_changed", "location_changed", "date_changed")
+
+# Evidence-derived markers for "this media is reported as AI-generated";
+# conservative on purpose: only exact known phrasings, never bare "AI".
+_AI_GENERATED_MARKERS = (
+    "ai-generated",
+    "ai generated",
+    "artificial intelligence",
+    "deepfake",
+    "buatan ai",
+    "dibuat ai",
+    "diduga ai",
+    "pakai ai",
+    "99% ai",
+)
 
 _VISUAL_CONFIDENCE: dict[VisualMatchLabel, float] = {
     "high": 0.95,
@@ -168,7 +182,19 @@ def _manipulation_types(
         and has_material_mismatch(comparison)
     ):
         types.append("old_footage_reused")
+    # AI-generation is only claimed when the collected evidence itself says
+    # so (summary/conflicts/unresolved from the synthesizer), never guessed.
+    if _ai_generated_reported(synthesis):
+        types.append("ai_generated_media")
     return types
+
+
+def _ai_generated_reported(synthesis: SynthesizedEvidence) -> bool:
+    """Deterministic keyword check over evidence-derived synthesis text."""
+    haystack = " ".join(
+        [synthesis.synthesis_summary, *synthesis.conflicts, *synthesis.unresolved]
+    ).casefold()
+    return any(marker in haystack for marker in _AI_GENERATED_MARKERS)
 
 
 def _confidence_components(
@@ -268,6 +294,12 @@ def build(
         classification=classification,
         evidence_confidence=evidence_confidence(
             _confidence_components(context, synthesis, comparison)
+        ),
+        confidence_score=hoax_confidence(
+            classification,
+            comparison,
+            event_web_finding=synthesis.event_web_finding,
+            existing_fact_checks_found=synthesis.existing_fact_checks_found,
         ),
         current_context=context,
         source_context=synthesis.probable_source_context,
