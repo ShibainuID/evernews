@@ -1,9 +1,12 @@
 "use client";
 
 import { useState, type ReactElement } from "react";
+import { motion, useReducedMotion } from "motion/react";
 import { Check, TriangleAlert, Minus, MoreHorizontal } from "lucide-react";
 import { FaWhatsapp, FaInstagram, FaXTwitter, FaTiktok, FaThreads, FaYoutube, FaFacebook } from "react-icons/fa6";
 import type { ComparisonStatus, DimensionComparison, ResultClassification, VerificationResult } from "@/lib/api";
+
+const EASE_OUT_EXPO = [0.16, 1, 0.3, 1] as const;
 
 export interface YourClipPreview {
   url: string;
@@ -80,6 +83,20 @@ export function FindingsDetail({
   const pill = PILL[result.classification];
   const source = result.source_context;
   const lesson = result.manipulation_types[0] ? MIL_COPY[result.manipulation_types[0]] : null;
+  const reduceMotion = useReducedMotion();
+
+  // Cards step in one after another rather than popping in as a block —
+  // the reveal should read as a sequence of findings, not a single flash.
+  const container = {
+    hidden: {},
+    visible: { transition: { staggerChildren: reduceMotion ? 0 : 0.09, delayChildren: reduceMotion ? 0 : 0.05 } },
+  };
+  const item = reduceMotion
+    ? { hidden: { opacity: 0 }, visible: { opacity: 1 } }
+    : {
+        hidden: { opacity: 0, y: 16 },
+        visible: { opacity: 1, y: 0, transition: { duration: 0.32, ease: EASE_OUT_EXPO } },
+      };
 
   async function share() {
     const text = `${pill.label}\n\n${result.summary}\n\nVisual match: ${MATCH_LABEL[result.visual_match]}\n\nChecked with Evernews.`;
@@ -93,8 +110,14 @@ export function FindingsDetail({
   }
 
   return (
-    <section className="mx-4 mt-4 space-y-4">
-      <div className="rounded-card bg-white p-5">
+    <motion.section
+      className="space-y-4"
+      variants={container}
+      initial="hidden"
+      animate="visible"
+      exit={{ opacity: 0, y: reduceMotion ? 0 : -8, transition: { duration: 0.2 } }}
+    >
+      <motion.div variants={item} className="rounded-card bg-white p-5">
         <div
           className={`mx-auto w-fit rounded-full border px-4 py-1.5 text-center text-base font-bold ${pill.className}`}
         >
@@ -165,35 +188,35 @@ export function FindingsDetail({
         <button onClick={onReset} className="mt-4 w-full rounded-full bg-brand py-3 text-sm font-bold text-white">
           Trace another clip
         </button>
-      </div>
+      </motion.div>
 
-      <div className="rounded-card bg-white p-5">
+      <motion.div variants={item} className="rounded-card bg-white p-5">
         <h3 className="text-sm font-bold">What matched, what didn't</h3>
         <div className="mt-2">
           <DimensionRow label="Event" dim={result.comparison.event} />
           <DimensionRow label="Location" dim={result.comparison.location} />
           <DimensionRow label="Date" dim={result.comparison.date} />
         </div>
-      </div>
+      </motion.div>
 
       {lesson && (
-        <div className="rounded-card bg-white p-5">
+        <motion.div variants={item} className="rounded-card bg-white p-5">
           <p className="text-xs font-semibold uppercase tracking-wide text-black/40">What happened?</p>
           <h3 className="mt-1 text-base font-bold">{lesson.title}</h3>
           <p className="mt-1 text-sm leading-relaxed text-black/70">{lesson.body}</p>
-        </div>
+        </motion.div>
       )}
 
       {result.unresolved.length > 0 && (
-        <div className="rounded-card bg-white p-5 text-xs text-black/50">
+        <motion.div variants={item} className="rounded-card bg-white p-5 text-xs text-black/50">
           <p className="font-semibold text-black/60">Still unclear:</p>
           <ul className="mt-1 list-disc space-y-0.5 pl-4">
             {result.unresolved.map((note) => (
               <li key={note}>{note}</li>
             ))}
           </ul>
-        </div>
+        </motion.div>
       )}
-    </section>
+    </motion.section>
   );
 }
