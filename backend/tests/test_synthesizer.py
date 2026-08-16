@@ -250,25 +250,30 @@ async def test_supporting_ids_must_be_known_subset():
     assert result.contradicting_evidence_ids == []
 
 
-# --- invalid output: unknown IDs / zero evidence -> fail clearly ---
+# --- invalid output: unknown IDs / zero evidence -> honest insufficient ---
 
 
-async def test_unknown_cited_evidence_id_fails_clearly():
+async def test_unknown_cited_evidence_id_degrades_to_insufficient():
     provider = _RecordingLuna(FakeLunaProvider([_claims(supporting_evidence_ids=["bogus_9"])]))
 
-    with pytest.raises(StructuredOutputError, match="bogus_9"):
-        await synthesize(_context(), _bundle(), [_source()], provider)
+    result = await synthesize(_context(), _bundle(), [_source()], provider)
+
+    assert result.event_web_finding == "insufficient"
+    assert result.supporting_evidence_ids == []
+    assert any("failed validation" in u for u in result.unresolved)
 
 
-async def test_supported_finding_with_zero_evidence_ids_fails_clearly():
+async def test_supported_finding_with_zero_evidence_ids_degrades_to_insufficient():
     provider = _RecordingLuna(
         FakeLunaProvider(
             [_claims(event_web_finding="supported", supporting_evidence_ids=[], contradicting_evidence_ids=[])]
         )
     )
 
-    with pytest.raises(StructuredOutputError, match="at least one"):
-        await synthesize(_context(), _bundle(), [_source()], provider)
+    result = await synthesize(_context(), _bundle(), [_source()], provider)
+
+    assert result.event_web_finding == "insufficient"
+    assert result.supporting_evidence_ids == []
 
 
 def test_validate_synthesis_rejects_zero_evidence_for_verdict_findings():
