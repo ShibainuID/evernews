@@ -8,6 +8,9 @@ the pytest tmp dir.
 
 from pathlib import Path
 
+import asyncio
+import types
+
 import pytest
 
 from backend.config import Settings
@@ -153,3 +156,63 @@ def test_save_upload_accepts_video_without_audio(settings, tmp_path):
     )
 
     assert saved.exists() and saved.stat().st_size > 0
+
+
+async def _fake_fetch(result):
+    async def fetcher(url, *, timeout, max_bytes):
+        return result
+    return fetcher
+
+
+def test_save_remote_video_writes_and_validates(settings, tmp_path):
+    from backend.services.ingestion.video_ingestor import save_remote_video
+
+    video = make_video(tmp_path)
+    ver_id = new_verification_id()
+    fetcher = asyncio.run(_fake_fetch(types.SimpleNamespace(status=200, truncated=False, body=video.read_bytes())))
+
+    saved = asyncio.run(save_remote_video("https://example.com/clip.mp4", ver_id, settings=settings, fetch=fetcher))
+
+    assert saved == Path(settings.workdir) / ver_id / "original.mp4"
+    assert saved.read_bytes() == video.read_bytes()
+
+
+def test_save_remote_video_rejects_http_error(settings):
+    from backend.services.ingestion.video_ingestor import RemoteVideoFetchError, save_remote_video
+
+    fetcher = asyncio.run(_fake_fetch(types.SimpleNamespace(status=404, truncated=False, body=b"")))
+
+    with pytest.raises(RemoteVideoFetchError, match="404"):
+        asyncio.run(save_remote_video("https://example.com/missing.mp4", new_verification_id(), settings=settings, fetch=fetcher))
+
+
+def test_save_remote_video_rejects_truncated_body(settings):
+    from backend.services.ingestion.video_ingestor import RemoteVideoFetchError, save_remote_video
+
+    fetcher = asyncio.run(_fake_fetch(types.SimpleNamespace(status=200, truncated=True, body=b"x")))
+
+    with pytest.raises(RemoteVideoFetchError, match="MAX_VIDEO_SIZE_MB"):
+        asyncio.run(save_remote_video("https://example.com/big.mp4", new_verification_id(), settings=settings, fetch=fetcher))
+
+
+def test_save_remote_video_rejects_non_video_body(settings, tmp_path):
+    from backend.services.ingestion.video_ingestor import save_remote_video
+
+    corrupt = make_corrupt_mp4(tmp_path)
+    ver_id = new_verification_id()
+    fetcher = asyncio.run(_fake_fetch(types.SimpleNamespace(status=200, truncated=False, body=corrupt.read_bytes())))
+
+    with pytest.raises(InvalidVideoError):
+        asyncio.run(save_remote_video("https://example.com/not-video.mp4", ver_id, settings=settings, fetch=fetcher))
+
+    assert not (Path(settings.workdir) / ver_id).exists()
+
+
+def test_save_remote_video_wraps_fetch_exception(settings):
+    from backend.services.ingestion.video_ingestor import RemoteVideoFetchError, save_remote_video
+
+    async def boom(url, *, timeout, max_bytes):
+        raise RuntimeError("connection refused")
+
+    with pytest.raises(RemoteVideoFetchError, match="connection refused"):
+        asyncio.run(save_remote_video("https://example.com/x.mp4", new_verification_id(), settings=settings, fetch=boom))

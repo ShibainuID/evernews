@@ -34,6 +34,7 @@ from backend.services.ingestion.video_ingestor import (
     IngestionError,
     MediaProbeUnavailableError,
     new_verification_id,
+    save_remote_video,
     save_upload,
 )
 from backend.services.validation.cache import query_cache
@@ -84,17 +85,25 @@ def _mark_failed(ver_id: str, error: str) -> None:
 @router.post("", status_code=202)
 async def create_verification(
     request: Request,
-    video: UploadFile = File(...),
+    video: UploadFile | None = File(None),
     caption: str = Form(""),
     source_url: str | None = Form(None),
+    video_url: str | None = Form(None),
     background_tasks: BackgroundTasks = BackgroundTasks(),
     providers: pipeline.Providers = Depends(get_providers),
 ) -> dict[str, str]:
-    """Accept a validated upload and schedule the pipeline; never hold it."""
+    """Accept a validated upload (file or remote URL) and schedule the pipeline."""
     settings = _settings(request)
     ver_id = new_verification_id()
     try:
-        video_path = save_upload(video.file, ver_id, settings)
+        if video is not None:
+            video_path = save_upload(video.file, ver_id, settings)
+        elif video_url:
+            video_path = await save_remote_video(video_url, ver_id, settings)
+        else:
+            raise HTTPException(
+                status_code=400, detail="provide a video file or a video_url"
+            )
     except IngestionError as exc:
         # trust-boundary reject: no state entry, no background job
         status_code = 503 if isinstance(exc, MediaProbeUnavailableError) else 400

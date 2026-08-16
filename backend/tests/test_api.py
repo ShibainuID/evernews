@@ -191,10 +191,11 @@ def test_video_too_long_rejected_before_background(app, tmp_path: Path):
     assert state_module.store._states == {}
 
 
-def test_upload_without_video_is_422(app):
+def test_upload_without_video_or_url_is_400(app):
     with TestClient(app) as client:
         resp = client.post(BASE, data={"caption": "no video here"})
-    assert resp.status_code == 422
+    assert resp.status_code == 400
+    assert "video_url" in resp.json()["detail"]
 
 
 def test_debug_returns_artifacts_and_result_summaries(app, video: Path):

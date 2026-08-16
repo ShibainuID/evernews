@@ -91,12 +91,11 @@ def _reject_unsafe(url: str) -> None:
             raise UnsafeURLError(f"host {host!r} resolves to blocked address {ip}")
 
 
-async def _read_limited(response: httpx.Response) -> tuple[bytes, bool]:
-    """Read at most ``MAX_FETCH_BYTES`` bytes from the stream; report truncation.
+async def _read_limited(response: httpx.Response, limit: int = MAX_FETCH_BYTES) -> tuple[bytes, bool]:
+    """Read at most ``limit`` bytes from the stream; report truncation.
 
     The body is consumed chunk by chunk and never buffered beyond the cap.
     """
-    limit = MAX_FETCH_BYTES
     body = bytearray()
     truncated = False
     try:
@@ -115,8 +114,14 @@ async def _read_limited(response: httpx.Response) -> tuple[bytes, bool]:
     return bytes(body), truncated
 
 
-async def safe_fetch(url: str, *, timeout: float = _REQUEST_TIMEOUT) -> SafeFetchResult:
-    """Fetch ``url`` with SSRF guards; see the module docstring for the guarantees."""
+async def safe_fetch(
+    url: str, *, timeout: float = _REQUEST_TIMEOUT, max_bytes: int = MAX_FETCH_BYTES
+) -> SafeFetchResult:
+    """Fetch ``url`` with SSRF guards; see the module docstring for the guarantees.
+
+    ``max_bytes`` caps the returned body (page enrichment stays at the module
+    default; callers fetching whole media may raise it).
+    """
     _reject_unsafe(url)
     async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
         for hop in range(MAX_REDIRECTS + 1):
@@ -138,6 +143,6 @@ async def safe_fetch(url: str, *, timeout: float = _REQUEST_TIMEOUT) -> SafeFetc
                 url = urljoin(url, location)
                 _reject_unsafe(url)
                 continue
-            body, truncated = await _read_limited(response)
+            body, truncated = await _read_limited(response, max_bytes)
             return SafeFetchResult(url=url, status=response.status_code, body=body, truncated=truncated)
     raise AssertionError("unreachable: loop always returns or raises")

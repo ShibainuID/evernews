@@ -8,6 +8,7 @@ import {
   VerificationError,
   type ResultClassification,
   type VerificationResult,
+  type VerificationSource,
   type VerificationStage,
 } from "@/lib/api";
 import type { YourClipPreview } from "@/components/FindingsDetail";
@@ -61,6 +62,8 @@ export function HeroCard({
   const [stageLabel, setStageLabel] = useState(STAGE_LABELS.uploading);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [caption, setCaption] = useState("");
+  const [link, setLink] = useState("");
+  const [mode, setMode] = useState<"file" | "link">("file");
   const [error, setError] = useState<string | null>(null);
   const [revealResult, setRevealResult] = useState<VerificationResult | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -77,15 +80,15 @@ export function HeroCard({
     };
   }, []);
 
-  async function runVerification(selected: File) {
-    const objectUrl = URL.createObjectURL(selected);
-    setPreviewUrl(objectUrl);
+  async function runVerification(source: VerificationSource) {
+    const preview = source.file ? URL.createObjectURL(source.file) : (source.videoUrl ?? null);
+    setPreviewUrl(preview);
     setError(null);
     setStage("uploading");
     setStageLabel(STAGE_LABELS.uploading);
 
     try {
-      const result = await submitVerification(selected, caption, (nextStage) => {
+      const result = await submitVerification(source, caption, (nextStage) => {
         if (!mountedRef.current) return;
         setStage("analyzing");
         setStageLabel(STAGE_LABELS[nextStage]);
@@ -95,7 +98,7 @@ export function HeroCard({
       setStage("reveal");
       await new Promise((r) => setTimeout(r, REVEAL_MS));
       if (!mountedRef.current) return;
-      onResult(result, { url: objectUrl });
+      onResult(result, preview ? { url: preview } : undefined);
       setStage("done");
     } catch (err) {
       if (!mountedRef.current) return;
@@ -110,6 +113,8 @@ export function HeroCard({
     setStage("idle");
     setPreviewUrl(null);
     setCaption("");
+    setLink("");
+    setMode("file");
     setError(null);
     setRevealResult(null);
     onResult(null);
@@ -123,7 +128,17 @@ export function HeroCard({
       setStage("error");
       return;
     }
-    runVerification(picked);
+    runVerification({ file: picked });
+  }
+
+  function handleLinkSubmit() {
+    const trimmed = link.trim();
+    if (!/^https?:\/\/.+/i.test(trimmed)) {
+      setError("That doesn't look like a link — it should start with http:// or https://");
+      setStage("error");
+      return;
+    }
+    runVerification({ videoUrl: trimmed });
   }
 
   const fill = fillHeight ? "lg:h-auto lg:flex-1" : "";
@@ -150,36 +165,84 @@ export function HeroCard({
         <AnimatePresence mode="wait" initial={false}>
           {stage === "idle" && (
             <motion.div key="idle" {...stageVariants} transition={stageTransition} className="flex flex-1 flex-col">
-              <button
-                onClick={() => inputRef.current?.click()}
-                onDragOver={(e) => e.preventDefault()}
-                onDrop={(e) => {
-                  e.preventDefault();
-                  handleFiles(e.dataTransfer.files);
-                }}
-                className={`flex h-40 w-full flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-black/20 px-6 text-center text-sm text-black/50 transition hover:border-brand hover:text-brand ${fill}`}
-              >
-                <span className="flex h-[70px] w-[70px] shrink-0 items-center justify-center rounded-2xl bg-black/5">
-                  <Plus size={32} strokeWidth={1.5} />
-                </span>
-                <span className="max-w-[240px]">Drop/paste the clip you want to trace here</span>
-              </button>
-              <input
-                ref={inputRef}
-                type="file"
-                accept="video/*"
-                className="hidden"
-                onChange={(e) => handleFiles(e.target.files)}
-              />
-              <label className="mt-3 block text-xs font-medium text-black/50">
-                Got a caption or claim that came with it? (optional)
-                <input
-                  value={caption}
-                  onChange={(e) => setCaption(e.target.value)}
-                  placeholder="e.g. Jakarta is flooding today"
-                  className="mt-1 w-full rounded-lg border border-black/10 px-3 py-2 text-sm text-black placeholder:text-black/30 focus:border-brand focus:outline-none"
-                />
-              </label>
+              <div className="flex w-fit rounded-full bg-black/5 p-0.5 text-xs font-semibold">
+                <button
+                  type="button"
+                  onClick={() => setMode("file")}
+                  className={`rounded-full px-4 py-1.5 transition ${
+                    mode === "file" ? "bg-white text-black shadow-sm" : "text-black/50"
+                  }`}
+                >
+                  Upload file
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setMode("link")}
+                  className={`rounded-full px-4 py-1.5 transition ${
+                    mode === "link" ? "bg-white text-black shadow-sm" : "text-black/50"
+                  }`}
+                >
+                  Paste link
+                </button>
+              </div>
+
+              {mode === "file" ? (
+                <>
+                  <button
+                    onClick={() => inputRef.current?.click()}
+                    onDragOver={(e) => e.preventDefault()}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      handleFiles(e.dataTransfer.files);
+                    }}
+                    className={`mt-4 flex h-40 w-full flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-black/20 px-6 text-center text-sm text-black/50 transition hover:border-brand hover:text-brand ${fill}`}
+                  >
+                    <span className="flex h-[70px] w-[70px] shrink-0 items-center justify-center rounded-2xl bg-black/5">
+                      <Plus size={32} strokeWidth={1.5} />
+                    </span>
+                    <span className="max-w-[240px]">Drop/paste the clip you want to trace here</span>
+                  </button>
+                  <input
+                    ref={inputRef}
+                    type="file"
+                    accept="video/*"
+                    className="hidden"
+                    onChange={(e) => handleFiles(e.target.files)}
+                  />
+                  <label className="mt-3 block text-xs font-medium text-black/50">
+                    Got a caption or claim that came with it? (optional)
+                    <input
+                      value={caption}
+                      onChange={(e) => setCaption(e.target.value)}
+                      placeholder="e.g. Jakarta is flooding today"
+                      className="mt-1 w-full rounded-lg border border-black/10 px-3 py-2 text-sm text-black placeholder:text-black/30 focus:border-brand focus:outline-none"
+                    />
+                  </label>
+                </>
+              ) : (
+                <label className="mt-4 block text-xs font-medium text-black/50">
+                  Paste a link to the video
+                  <span className="mt-1 flex gap-2">
+                    <input
+                      value={link}
+                      onChange={(e) => setLink(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") handleLinkSubmit();
+                      }}
+                      placeholder="https://example.com/clip.mp4"
+                      className="min-w-0 flex-1 rounded-lg border border-black/10 px-3 py-2 text-sm text-black placeholder:text-black/30 focus:border-brand focus:outline-none"
+                    />
+                    <button
+                      type="button"
+                      onClick={handleLinkSubmit}
+                      disabled={!link.trim()}
+                      className="shrink-0 rounded-lg bg-brand px-4 py-2 text-xs font-bold text-white transition hover:opacity-90 disabled:opacity-40"
+                    >
+                      Trace
+                    </button>
+                  </span>
+                </label>
+              )}
             </motion.div>
           )}
 
