@@ -7,3 +7,12 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 data/demo_sources/_index.json
+
+# frontend
+frontend/node_modules/
+frontend/.next/
+frontend/.env.local
+
+# backend venv
+backend/.venv/
+
