@@ -458,6 +458,8 @@ def test_render_prompt_includes_context_and_config_bounds(monkeypatch):
     assert "Banjir besar melanda Jakarta" in prompt
     assert "banjir Jakarta hari ini" in prompt  # transcript
     assert "kf_01" in prompt
+    assert "Visual observations: none" in prompt or "Visual observations:" in prompt
+    assert "On-screen OCR text:" in prompt
     assert "(max 3 tasks)" in prompt  # MAX_WEB_RESEARCH_TASKS rendered
     assert "At most 2 queries per task." in prompt  # MAX_QUERIES_PER_TASK rendered
 

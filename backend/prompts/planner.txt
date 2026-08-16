@@ -22,6 +22,8 @@ Video claims:
 
 Transcript: $transcript
 Visual summary: $visual_summary
+Visual observations: $visual_observations
+On-screen OCR text: $ocr_texts
 Visual location clues: $visual_location_clues
 Keyframes: $keyframes
 
@@ -35,6 +37,7 @@ Create exactly one JSON object with:
 Rules:
 - Search in both the language of the claim and English when useful. For Indonesian claims, always include one Indonesian and one English query variant per task and set fact-check language_codes to ["id", "en"].
 - Use precise date/location/entity variants.
+- Use distinctive on-screen text, names, logos, and objects from the OCR text and visual observations as query material for provenance and reuse tasks — a page quoting the same on-screen text is strong evidence of reuse.
 - At most $max_queries queries per task.
 - Never emit a verdict, final label, or confidence in truth.
 - Never invent evidence or source URLs.
