@@ -16,3 +16,5 @@ frontend/.env.local
 # backend venv
 backend/.venv/
 
+secrets/
+
