@@ -18,6 +18,17 @@ class StructuredOutputError(ValueError):
     """LLM output did not match the requested schema after one repair attempt."""
 
 
+def _coerce_json(raw: str) -> str:
+    """Loose model output -> JSON string: strip markdown fences and any prose
+    wrapped around the first balanced ``{...}`` block (LLMs often prefix
+    meta-commentary or enclose JSON in ```json fences)."""
+    s = raw.strip()
+    start, end = s.find("{"), s.rfind("}")
+    if 0 <= start < end:
+        return s[start : end + 1]
+    return s
+
+
 def parse_structured(
     raw: str,
     schema: type[T],
@@ -29,7 +40,7 @@ def parse_structured(
     exception and must return one repaired JSON string.
     """
     try:
-        return schema.model_validate_json(raw)
+        return schema.model_validate_json(_coerce_json(raw))
     except ValidationError as first_error:
         if repair_fn is None:
             raise StructuredOutputError(
@@ -42,7 +53,7 @@ def parse_structured(
                 f"{schema.__name__}: repair failed: {repair_error}"
             ) from repair_error
         try:
-            return schema.model_validate_json(repaired)
+            return schema.model_validate_json(_coerce_json(repaired))
         except ValidationError as final_error:
             raise StructuredOutputError(
                 f"{schema.__name__}: structured output invalid after repair: {final_error}"
