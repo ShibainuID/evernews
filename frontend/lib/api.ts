@@ -138,7 +138,7 @@ export async function getVerificationResult(id: string): Promise<VerificationRes
 }
 
 const POLL_INTERVAL_MS = 1200;
-const POLL_TIMEOUT_MS = 120_000;
+const POLL_TIMEOUT_MS = 300_000;
 
 /** Starts a verification job and polls until it completes or fails. */
 export async function submitVerification(
