@@ -33,8 +33,8 @@ function useCyclingFrame(frames: string[], active: boolean) {
 
 export function HeroCard({ onResult }: { onResult: (result: VerificationResult | null) => void }) {
   const [stage, setStage] = useState<Stage>("idle");
-  const [file, setFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [isImage, setIsImage] = useState(false);
   const [caption, setCaption] = useState("");
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -43,7 +43,7 @@ export function HeroCard({ onResult }: { onResult: (result: VerificationResult |
   const analyzingText = useCyclingFrame(ANALYZING_FRAMES, stage === "analyzing");
 
   async function runVerification(selected: File) {
-    setFile(selected);
+    setIsImage(selected.type.startsWith("image/"));
     setPreviewUrl(URL.createObjectURL(selected));
     setError(null);
     setStage("uploading");
@@ -67,8 +67,8 @@ export function HeroCard({ onResult }: { onResult: (result: VerificationResult |
 
   function reset() {
     setStage("idle");
-    setFile(null);
     setPreviewUrl(null);
+    setIsImage(false);
     setCaption("");
     setError(null);
     onResult(null);
@@ -77,8 +77,8 @@ export function HeroCard({ onResult }: { onResult: (result: VerificationResult |
   function handleFiles(files: FileList | null) {
     const picked = files?.[0];
     if (!picked) return;
-    if (!picked.type.startsWith("video/")) {
-      setError("That's not a video file — try a clip instead of a photo or document.");
+    if (!picked.type.startsWith("video/") && !picked.type.startsWith("image/")) {
+      setError("That's not a clip or a photo we can read — try a video or an image file instead.");
       setStage("error");
       return;
     }
@@ -94,7 +94,7 @@ export function HeroCard({ onResult }: { onResult: (result: VerificationResult |
         </span>{" "}
         about itself.
       </h1>
-      <p className="mt-1 text-sm text-black/70">Drop in a clip of up to 15 seconds.</p>
+      <p className="mt-1 text-sm text-black/70">Drop in a clip of up to 15 seconds, or a photo.</p>
 
       <div className="mt-4 rounded-card border border-black/10 bg-white p-4 shadow-sm">
         {stage === "idle" && (
@@ -111,12 +111,12 @@ export function HeroCard({ onResult }: { onResult: (result: VerificationResult |
               <span className="flex h-[70px] w-[70px] items-center justify-center rounded-2xl bg-black/5">
                 <Plus size={32} strokeWidth={1.5} />
               </span>
-              Drop/paste the clip you want to trace here
+              Drop/paste the clip or photo you want to trace here
             </button>
             <input
               ref={inputRef}
               type="file"
-              accept="video/*"
+              accept="video/*,image/*"
               className="hidden"
               onChange={(e) => handleFiles(e.target.files)}
             />
@@ -143,7 +143,11 @@ export function HeroCard({ onResult }: { onResult: (result: VerificationResult |
 
         {stage === "analyzing" && (
           <div className="flex flex-col items-center gap-2">
-            {previewUrl && (
+            {previewUrl && isImage && (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={previewUrl} alt="" className="h-40 w-auto rounded-xl object-cover" />
+            )}
+            {previewUrl && !isImage && (
               <video src={previewUrl} className="h-40 w-auto rounded-xl object-cover" muted playsInline autoPlay loop />
             )}
             <p className="text-xs italic text-black/50">{analyzingText}</p>
@@ -161,7 +165,7 @@ export function HeroCard({ onResult }: { onResult: (result: VerificationResult |
 
         {stage === "done" && (
           <button onClick={reset} className="w-full text-left text-xs font-semibold text-brand underline">
-            Check another video
+            Check another clip or photo
           </button>
         )}
       </div>
