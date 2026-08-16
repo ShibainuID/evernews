@@ -18,7 +18,7 @@ from fastapi import APIRouter, Form, HTTPException, UploadFile
 from backend.config import Settings
 from backend.schemas.evidence import ComparisonStatus, KeyframeRef
 from backend.schemas.result import SourceContext, VerificationResult
-from backend.services.context.caption_claims import extract_claims
+from backend.services.context.caption_claims import extract_claims, has_internal_conflict
 from backend.services.evidence.classification import classify
 from backend.services.evidence.comparator import compare
 from backend.services.evidence.confidence import evidence_confidence
@@ -157,7 +157,7 @@ async def create_verification(video: UploadFile, caption: str = Form(default="")
     classification = classify(
         visual_match=visual_match,
         comparison=comparison,
-        has_textual_conflict=False,
+        has_textual_conflict=has_internal_conflict(caption),
         source_context_complete=source_complete,
     )
 
