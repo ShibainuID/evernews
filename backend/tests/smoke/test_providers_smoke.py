@@ -99,12 +99,14 @@ def test_paddleocr_extracts_text_from_synthetic_image(tmp_path):
     code = (
         "import sys; sys.path.insert(0, %r)\n"
         "from backend.providers.paddleocr import PaddleOCRProvider\n"
-        "hits = PaddleOCRProvider().extract([%r])\n"
+        "from backend.schemas.evidence import OCRFrameRef\n"
+        "hits = PaddleOCRProvider().extract([OCRFrameRef(%r, 0.0)])\n"
         "assert len(hits) >= 1, hits\n"
         "for h in hits:\n"
         "    assert isinstance(h.text, str) and h.text.strip()\n"
         "    assert isinstance(h.confidence, float)\n"
         "    assert h.frame_id == %r\n"
+        "    assert h.timestamp_sec == 0.0\n"
         "print('OK', len(hits))"
     ) % (
         str(Path(__file__).resolve().parents[2]),

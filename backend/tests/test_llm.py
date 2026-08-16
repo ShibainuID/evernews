@@ -30,6 +30,24 @@ def test_valid_raw_json_with_defaults():
     assert result.confidence is None
 
 
+def test_fenced_json_block_is_coerced():
+    raw = 'Here is the result:\n```json\n{"transcript": "fenced", "language": "en"}\n```'
+
+    result = parse_structured(raw, SpeechExtraction)
+
+    assert result.transcript == "fenced"
+    assert result.language == "en"
+
+
+def test_prose_before_json_block_is_coerced():
+    raw = 'The validation error says fix it: {"transcript": "prose", "language": "id"} trailing prose'
+
+    result = parse_structured(raw, SpeechExtraction)
+
+    assert result.transcript == "prose"
+    assert result.language == "id"
+
+
 def test_invalid_then_repair_returns_model():
     raw = '{"transcript": "repaired",}'  # trailing comma: invalid JSON
 

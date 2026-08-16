@@ -28,7 +28,12 @@ import pytest
 
 from backend import state as state_module
 from backend.schemas.context import OCRHit, SpeechExtraction
-from backend.schemas.evidence import ComparisonStatus, EvidenceType, ResultClassification
+from backend.schemas.evidence import (
+    ComparisonStatus,
+    EvidenceType,
+    OCRFrameRef,
+    ResultClassification,
+)
 from backend.schemas.result import SourceCandidate, VerificationResult
 from backend.services import pipeline
 from backend.services.ingestion.video_ingestor import new_verification_id
@@ -153,8 +158,19 @@ class _SleepingSpeech:
 class _FailingOcr:
     """Raises in the child, like a broken PaddleOCR load."""
 
-    def extract(self, frame_paths: list[str]) -> list[OCRHit]:
+    def extract(self, frames: list[OCRFrameRef]) -> list[OCRHit]:
         raise RuntimeError("child paddle exploded")
+
+
+class _RecordingOcr:
+    """Records the frame refs handed to OCR; returns no hits (§4.4 seam)."""
+
+    def __init__(self) -> None:
+        self.calls: list[list[OCRFrameRef]] = []
+
+    def extract(self, frames: list[OCRFrameRef]) -> list[OCRHit]:
+        self.calls.append(list(frames))
+        return []
 
 
 # --- scripted output builders ---
@@ -750,6 +766,38 @@ async def test_ocr_failure_continues_with_empty_ocr(settings: Any, video: Path):
     assert_evidence_invariants(result)
 
 
+async def test_ocr_uses_dedicated_ocr_frames_with_sample_timestamps(settings: Any, video: Path):
+    """HANDOFF §4.4: OCR gets its own ~1 fps sampled set from ``ocr_frames/``,
+    never the visual keyframes, and every hit-time derives from the fps=1 /
+    t=0 sampling contract (sample i at t=i), not a keyframe index."""
+    ver_id = new_verification_id()
+    providers = _case_a(ver_id)
+    recording = _RecordingOcr()
+    providers.ocr = recording
+
+    result = await pipeline.run_verification(
+        ver_id, pipeline.VerificationRequest(video_path=video), providers, settings=settings
+    )
+
+    assert isinstance(result, VerificationResult)
+    assert recording.calls and recording.calls[-1], "OCR provider must receive the sampled frames"
+    frames = recording.calls[-1]
+    assert all("/ocr_frames/" in ref.local_path for ref in frames), (
+        "OCR frames must come from the dedicated ocr_frames set"
+    )
+    assert all("/keyframes/" not in ref.local_path for ref in frames), (
+        "OCR must never reuse the visual keyframes"
+    )
+    # fps=1 aligned at t=0: sample i sits at t=i, capped at 15
+    assert [ref.timestamp_sec for ref in frames] == [float(i) for i in range(len(frames))]
+    assert 1 <= len(frames) <= 15
+    # the on-disk ocr_frames artifact set is exactly what the provider received
+    ocr_dir = Path(settings.workdir) / ver_id / "ocr_frames"
+    assert ocr_dir.is_dir()
+    assert {Path(ref.local_path) for ref in frames} == set(ocr_dir.glob("frame_*.jpg"))
+    assert_evidence_invariants(result)
+
+
 async def test_fact_check_failure_records_branch_error_but_builds_result(settings: Any, video: Path):
     ver_id = new_verification_id()
     providers = _case_a(ver_id)
@@ -803,7 +851,42 @@ async def test_investigator_timeout_marks_web_branch_incomplete(settings: Any, v
     assert_evidence_invariants(result)
 
 
-async def test_empty_vision_with_demo_index_yields_demo_candidate(settings: Any, video: Path):
+async def test_image_upload_runs_without_ffmpeg_and_single_keyframe(settings: Any, tmp_path: Path):
+    """Images skip ffmpeg/audio entirely: one keyframe = the image itself,
+    empty speech, OCR gets exactly the image as its frame set."""
+    ver_id = new_verification_id()
+    image = tmp_path / "photo.jpg"
+    image.write_bytes(b"\xff\xd8\xff\xe0\x00\x10JFIF" + b"\x00" * 128)
+    providers = _case_a(ver_id)
+    recording = _RecordingOcr()
+    providers.ocr = recording
+
+    result = await pipeline.run_verification(
+        ver_id, pipeline.VerificationRequest(video_path=image), providers, settings=settings
+    )
+
+    assert isinstance(result, VerificationResult)
+    assert result.current_context.transcript == ""  # images have no audio
+    assert len(result.current_context.keyframes) == 1
+    keyframe = result.current_context.keyframes[0]
+    assert Path(keyframe.local_path) == image
+    assert keyframe.selection_reason == "single_image_upload"
+    assert recording.calls and recording.calls[-1] == [
+        OCRFrameRef(local_path=str(image), timestamp_sec=0.0)
+    ]
+    assert_evidence_invariants(result)
+
+
+@pytest.mark.parametrize(
+    ("match_types", "strength_marker"),
+    [
+        (["visually_similar", "hash:average_hamming"], None),  # weak tier stays weak
+        (["full_image_match", "hash:average_hamming", "hash_distance:2"], "high"),
+    ],
+)
+async def test_empty_vision_with_demo_index_yields_demo_candidate(
+    match_types: list[str], strength_marker: str | None, settings: Any, video: Path
+):
     ver_id = new_verification_id()
     providers = _case_a(ver_id)
     providers.vision = FakeVisionProvider([[]])  # provider healthy, zero matches
@@ -822,7 +905,7 @@ async def test_empty_vision_with_demo_index_yields_demo_candidate(settings: Any,
                     location="Bangkok",
                     time_context="2022-10-03",
                     matched_frame_ids=[f"{ver_id}_kf000"],
-                    match_types=["visually_similar", "hash:average_hamming"],
+                    match_types=match_types,
                     earliest_known_date="2022-10-03",
                     origin="demo_index",
                 )
@@ -838,6 +921,8 @@ async def test_empty_vision_with_demo_index_yields_demo_candidate(settings: Any,
     demo = [source for source in result.sources if source.url == demo_url]
     assert demo, "demo candidate must enter the result when vision is empty"
     assert any("demo_index" in match_type for match_type in demo[0].match_types)
+    if strength_marker is not None:
+        assert strength_marker in demo[0].match_types  # D1: match strength survives normalization
     assert_evidence_invariants(result)
 
 

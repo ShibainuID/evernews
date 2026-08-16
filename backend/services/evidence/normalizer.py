@@ -17,6 +17,7 @@ from backend.schemas.investigation import (
     WebSourceEvidence,
 )
 from backend.schemas.result import SourceCandidate
+from backend.services.evidence.page_metadata import PageMetadata, parse_page_metadata
 from backend.utils.fetch import SafeFetchResult
 from backend.utils.urls import canonicalize
 
@@ -214,7 +215,9 @@ def _web_record(evidence: WebSourceEvidence) -> _Raw:
     )
 
 
-def _visual_record(candidate: VisualWebCandidate) -> _Raw:
+def _visual_record(candidate: VisualWebCandidate, meta: PageMetadata | None = None) -> _Raw:
+    """Page-parsed metadata wins; agent fields are the fallback (HANDOFF 13.3)."""
+    meta = meta or PageMetadata()
     score_entry = (
         (f"provider_score:{candidate.provider_score}",)
         if candidate.provider_score is not None
@@ -224,7 +227,13 @@ def _visual_record(candidate: VisualWebCandidate) -> _Raw:
         url=candidate.url,
         origin=_ORIGIN_WEB,
         evidence_id=candidate.candidate_id,
-        title=candidate.page_title,
+        publisher=meta.publisher,
+        title=meta.title or candidate.page_title,
+        published_at=meta.published_at,
+        event=meta.event,
+        location=meta.location,
+        time_context=meta.time_context,
+        description=meta.description,
         frame_id=candidate.frame_id,
         match_types=(
             candidate.candidate_type,
@@ -265,15 +274,17 @@ def _to_candidate(merged: _Merged) -> SourceCandidate:
     return candidate
 
 
-async def _fetch_page(candidate: VisualWebCandidate, fetcher: Callable[[str], Awaitable[SafeFetchResult]]) -> None:
-    """Page enrichment hook: fetch the matched page. Failure must not abort."""
+async def _fetch_page(candidate: VisualWebCandidate, fetcher: Callable[[str], Awaitable[SafeFetchResult]]) -> PageMetadata:
+    """Fetch the matched page and extract deterministic metadata (HANDOFF 13.3).
+
+    Failure-tolerant: a blocked, empty, or malformed page yields empty
+    metadata and the page_match must remain a candidate either way.
+    """
     try:
-        await fetcher(candidate.page_url or candidate.url)
+        result = await fetcher(candidate.page_url or candidate.url)
     except Exception:
-        # ponytail: fetch is a heuristic enrichment; result unused until HTML
-        # parsing lands (excluded from T13), and one bad page must not kill
-        # normalization.
-        pass
+        return PageMetadata()
+    return parse_page_metadata(result.body)
 
 
 async def build_source_candidates(
@@ -296,9 +307,8 @@ async def build_source_candidates(
         for source_evidence in result.evidence:
             _merge_or_create(merged, _web_record(source_evidence))
     for candidate in bundle.visual_candidates:
-        if candidate.candidate_type == "page_match":
-            await _fetch_page(candidate, fetcher)
-        _merge_or_create(merged, _visual_record(candidate))
+        meta = await _fetch_page(candidate, fetcher) if candidate.candidate_type == "page_match" else None
+        _merge_or_create(merged, _visual_record(candidate, meta))
     return [_to_candidate(m) for m in merged.values()]
 
 

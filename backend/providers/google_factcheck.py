@@ -3,11 +3,11 @@
 ``search_fact_checks`` runs one query stream against
 ``GET https://factchecktools.googleapis.com/v1alpha1/claims:search`` with a
 15s timeout, following ``nextPageToken`` for at most 3 pages. Each page
-request retries at most 2 attempts for 5xx/429 via ``utils/retry.py`` (429
-honors a numeric ``Retry-After``); other errors — including timeouts — are
-never retried and never converted into a fake empty result: a raised error is
-a branch failure for the orchestrator (T32), while ``[]`` is only returned
-when the API itself has no claims.
+request retries at most 3 attempts (two retries) for 5xx/429 via
+``utils/retry.py`` (429 honors a numeric ``Retry-After``); other errors —
+including timeouts — are never retried and never converted into a fake empty
+result: a raised error is a branch failure for the orchestrator (T32), while
+``[]`` is only returned when the API itself has no claims.
 
 Every claim-review pair becomes one ``FactCheckEvidence``; the publisher's
 ``textualRating`` is stored verbatim (never mapped to a final classification)
@@ -27,7 +27,7 @@ from backend.utils.retry import retry_async
 _ENDPOINT = "https://factchecktools.googleapis.com/v1alpha1/claims:search"
 _TIMEOUT_SEC = 15.0
 _MAX_PAGES = 3
-_MAX_ATTEMPTS = 2  # bounded: one initial call plus one retry
+_MAX_ATTEMPTS = 3  # bounded: one initial call plus two retries (HANDOFF §27)
 _BASE_DELAY = 0.5
 
 

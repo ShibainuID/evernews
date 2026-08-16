@@ -10,6 +10,7 @@ import shutil
 from pathlib import Path
 
 from backend.config import Settings
+from backend.schemas.evidence import OCRFrameRef
 from backend.services.preprocessing.ffmpeg import run_ffmpeg
 from backend.services.preprocessing.keyframes import _require_tools, _safe_ver_id
 
@@ -57,3 +58,16 @@ def sample_ocr_frames(path: Path | str, ver_id: str, settings: Settings | None =
     except Exception:
         shutil.rmtree(ocr_dir, ignore_errors=True)
         raise
+
+
+def ocr_frame_refs(path: Path | str, ver_id: str, settings: Settings | None = None) -> list[OCRFrameRef]:
+    """Sample OCR frames and bind each to its contract timestamp.
+
+    The fps=1 filter emits frame i at t = i / rate from t=0, so the sample
+    time is derived from the same ``_OCR_RATE`` constant the ffmpeg filter
+    uses — never from the visual-keyframe list or a bare list index.
+    """
+    return [
+        OCRFrameRef(local_path=frame_path, timestamp_sec=round(i / _OCR_RATE, 3))
+        for i, frame_path in enumerate(sample_ocr_frames(path, ver_id, settings))
+    ]

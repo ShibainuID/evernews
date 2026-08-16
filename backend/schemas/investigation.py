@@ -17,8 +17,8 @@ class WebResearchTask(BaseModel):
     question: str
     queries: list[str]
     preferred_source_types: list[str]
-    max_searches: int = 4
-    max_pages: int = 6
+    max_searches: int = 2  # speed knob: 2 searches / 3 pages keeps one agent run ~40-60s
+    max_pages: int = 3
 
 
 class VisualSearchTask(BaseModel):

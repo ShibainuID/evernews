@@ -57,7 +57,7 @@ def test_defaults_from_handoff_25(monkeypatch):
     assert settings.enable_local_visual_embeddings is False
     assert settings.enable_local_feature_matching is False
     assert settings.max_web_research_tasks == 3
-    assert settings.max_queries_per_task == 4
+    assert settings.max_queries_per_task == 2
 
 
 def test_env_override_readable(monkeypatch):

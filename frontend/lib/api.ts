@@ -97,11 +97,22 @@ async function readErrorDetail(res: Response, fallback: string): Promise<string>
   return fallback;
 }
 
+export type VerificationSource = { file?: File; videoUrl?: string };
+
 /** Kicks off a verification job; returns immediately with its id (202). */
-export async function startVerification(file: File, caption: string): Promise<{ verification_id: string }> {
+export async function startVerification(
+  source: VerificationSource,
+  caption: string,
+): Promise<{ verification_id: string }> {
   const body = new FormData();
-  body.append("video", file);
   body.append("caption", caption);
+  if (source.videoUrl) {
+    body.append("video_url", source.videoUrl);
+  } else if (source.file) {
+    body.append("video", source.file);
+  } else {
+    throw new VerificationError("No clip provided — add a file or a link.", 400);
+  }
 
   const res = await fetch(VERIFICATION_PATH, { method: "POST", body });
   if (!res.ok) {
@@ -127,15 +138,15 @@ export async function getVerificationResult(id: string): Promise<VerificationRes
 }
 
 const POLL_INTERVAL_MS = 1200;
-const POLL_TIMEOUT_MS = 120_000;
+const POLL_TIMEOUT_MS = 300_000;
 
 /** Starts a verification job and polls until it completes or fails. */
 export async function submitVerification(
-  file: File,
+  source: VerificationSource,
   caption: string,
   onStage?: (stage: VerificationStage) => void,
 ): Promise<VerificationResult> {
-  const { verification_id } = await startVerification(file, caption);
+  const { verification_id } = await startVerification(source, caption);
   const deadline = Date.now() + POLL_TIMEOUT_MS;
 
   while (Date.now() < deadline) {

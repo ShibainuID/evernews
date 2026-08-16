@@ -13,6 +13,7 @@ from backend.providers.base import (
     WebResearchProvider,
 )
 from backend.schemas.context import OCRHit, SpeechExtraction, VisualObservation
+from backend.schemas.evidence import OCRFrameRef
 from backend.schemas.investigation import (
     VisualWebCandidate,
     WebResearchResult,
@@ -103,20 +104,20 @@ def test_fake_ocr_returns_scripted_hits():
     hits = [OCRHit(frame_id="f1", timestamp_sec=1.5, text="JAKARTA", confidence=0.9)]
     provider = FakeOCRExtractor([hits])
 
-    assert provider.extract(["/tmp/f1.png"]) == hits
+    assert provider.extract([OCRFrameRef(local_path="/tmp/f1.png", timestamp_sec=0.0)]) == hits
 
 
 def test_fake_ocr_empty_list_is_valid():
     provider = FakeOCRExtractor([[]])
 
-    assert provider.extract(["/tmp/f1.png"]) == []
+    assert provider.extract([OCRFrameRef(local_path="/tmp/f1.png", timestamp_sec=0.0)]) == []
 
 
 def test_fake_ocr_scripted_exception_propagates():
     provider = FakeOCRExtractor([RuntimeError("paddle down")])
 
     with pytest.raises(RuntimeError, match="paddle down"):
-        provider.extract(["/tmp/f1.png"])
+        provider.extract([OCRFrameRef(local_path="/tmp/f1.png", timestamp_sec=0.0)])
 
 
 # --- Luna ---

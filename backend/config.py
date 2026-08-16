@@ -1,8 +1,12 @@
 """Application settings, loaded from env vars / optional .env (see .env.example).
 
 All keys mirror HANDOFF §25. Every service/API consumes ``Settings`` (via
-``app.state.settings``); no module constructs its own.
+``app.state.settings``); no module constructs its own. Cloud-vision paths
+also propagate into ``os.environ`` because google-auth (ADC) reads real
+environment variables, never the .env file.
 """
+
+import os
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -46,6 +50,11 @@ class Settings(BaseSettings):
     enable_local_visual_embeddings: bool = False
     enable_local_feature_matching: bool = False
 
-    # Planner bounds (T31)
+    # Planner bounds (T31); lowered from 4 to keep live web research ~40-60s
     max_web_research_tasks: int = 3
-    max_queries_per_task: int = 4
+    max_queries_per_task: int = 2
+
+    def model_post_init(self, __context: object) -> None:
+        # google-auth ADC reads env vars, not .env; make .env values effective.
+        os.environ.setdefault("GOOGLE_APPLICATION_CREDENTIALS", self.google_application_credentials)
+        os.environ.setdefault("GOOGLE_CLOUD_PROJECT", self.google_cloud_project)

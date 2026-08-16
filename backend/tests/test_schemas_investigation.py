@@ -77,8 +77,8 @@ def test_fact_check_task_requires_queries():
 
 def test_web_research_task_default_max_searches_and_max_pages():
     task = _web_research_task()
-    assert task.max_searches == 4
-    assert task.max_pages == 6
+    assert task.max_searches == 2
+    assert task.max_pages == 3
 
 
 def test_visual_search_task_default_max_candidates_per_frame():

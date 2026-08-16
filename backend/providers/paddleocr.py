@@ -15,6 +15,7 @@ from typing import Any
 
 from backend.config import Settings
 from backend.schemas.context import OCRHit
+from backend.schemas.evidence import OCRFrameRef
 
 
 class OCRFrameError(Exception):
@@ -63,8 +64,8 @@ class PaddleOCRProvider:
         self._model_factory = model_factory or _default_model_factory
         self._model: Any = None
 
-    def extract(self, frame_paths: list[str]) -> list[OCRHit]:
-        paths = [Path(frame_path) for frame_path in frame_paths]
+    def extract(self, frames: list[OCRFrameRef]) -> list[OCRHit]:
+        paths = [Path(frame.local_path) for frame in frames]
         missing = [str(p) for p in paths if not p.is_file()]
         if missing:
             raise OCRFrameError(f"frame not found: {missing[0]}")
@@ -72,16 +73,16 @@ class PaddleOCRProvider:
             self._model = self._model_factory(self._lang)
         hits: list[OCRHit] = []
         prev_frame_keys: set[str] = set()  # normalized keys of the previous frame
-        for index, path in enumerate(paths):
+        for ref in frames:
             frame_keys: set[str] = set()
-            for raw in self._model.predict(str(path)) or []:
+            for raw in self._model.predict(ref.local_path) or []:
                 texts = raw.get("rec_texts") or []
                 scores = raw.get("rec_scores") or []
                 boxes = _as_boxes(raw.get("rec_boxes"))
                 for i in range(len(texts)):
                     hit = OCRHit(
-                        frame_id=path.stem,
-                        timestamp_sec=float(index),
+                        frame_id=Path(ref.local_path).stem,
+                        timestamp_sec=ref.timestamp_sec,  # sampling-contract time (§4.4), not index
                         text=str(texts[i]),
                         confidence=float(scores[i]),
                         bbox=[boxes[i]],

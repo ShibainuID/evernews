@@ -238,7 +238,7 @@ async def test_agent_reported_budget_exhaustion_passes_through():
             _response(200, _session_response()),
             _response(
                 200,
-                _message_response(_result_json(status="insufficient", searches_used=4, pages_fetched=6, unresolved=unresolved)),
+                _message_response(_result_json(status="insufficient", searches_used=2, pages_fetched=3, unresolved=unresolved)),
             ),
         ]
     )
@@ -248,8 +248,8 @@ async def test_agent_reported_budget_exhaustion_passes_through():
 
     assert result.status == "insufficient"
     assert result.unresolved == unresolved
-    assert result.searches_used == 4  # at budget, unchanged
-    assert result.pages_fetched == 6  # at budget, unchanged
+    assert result.searches_used == 2  # at budget, unchanged
+    assert result.pages_fetched == 3  # at budget, unchanged
 
 
 async def test_over_budget_searches_force_insufficient_and_clamp():
@@ -265,7 +265,7 @@ async def test_over_budget_searches_force_insufficient_and_clamp():
 
     assert result.status == "insufficient"  # supported claim is not trusted over budget
     assert any("budget" in note.lower() for note in result.unresolved)
-    assert result.searches_used == 4  # clamped to the task cap
+    assert result.searches_used == 2  # clamped to the task cap
     assert result.pages_fetched == 1
 
 
@@ -281,14 +281,14 @@ async def test_over_budget_pages_force_insufficient_and_clamp():
     result = await provider.investigate(_task())
 
     assert result.status == "insufficient"  # budget violation wins over mixed
-    assert result.pages_fetched == 6  # clamped to the task cap
+    assert result.pages_fetched == 3  # clamped to the task cap
 
 
 async def test_within_budget_counters_reported_unchanged():
     handler, _ = _scripted(
         [
             _response(200, _session_response()),
-            _response(200, _message_response(_result_json(searches_used=3, pages_fetched=2))),
+            _response(200, _message_response(_result_json(searches_used=1, pages_fetched=2))),
         ]
     )
     provider = _provider(httpx.MockTransport(handler))
@@ -296,7 +296,7 @@ async def test_within_budget_counters_reported_unchanged():
     result = await provider.investigate(_task())
 
     assert result.status == "supported"
-    assert result.searches_used == 3
+    assert result.searches_used == 1
     assert result.pages_fetched == 2
 
 
@@ -420,7 +420,7 @@ def test_render_prompt_includes_task_details():
     assert "Did flooding occur in Jakarta on 2026-08-15?" in prompt
     assert "Jakarta flood 2026" in prompt
     assert '["news"]' in prompt
-    assert "4" in prompt and "6" in prompt  # search/page budgets rendered
+    assert "2" in prompt and "3" in prompt  # search/page budgets rendered
 
 
 def test_investigator_prompt_has_no_final_verdict_bias():
@@ -431,7 +431,7 @@ def test_investigator_prompt_has_no_final_verdict_bias():
     assert "Search query snippets are not evidence" in text
     assert "Return structured JSON only" in text
     assert "untrusted evidence text" in text  # HANDOFF §31.1 injection guard
-    assert "8" in text  # max agent steps communicated
+    assert "4" in text  # max agent steps communicated
 
 
 def test_agent_file_frontmatter_and_rules_verbatim():
@@ -439,7 +439,7 @@ def test_agent_file_frontmatter_and_rules_verbatim():
 
     assert "mode: subagent" in text
     assert "temperature: 0.1" in text
-    assert "steps: 8" in text
+    assert "steps: 4" in text
     assert "websearch: allow" in text
     assert "webfetch: allow" in text
     assert "edit: deny" in text

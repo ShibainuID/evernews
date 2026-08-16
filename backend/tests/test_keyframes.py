@@ -14,10 +14,10 @@ from pathlib import Path
 import pytest
 
 from backend.config import Settings
-from backend.schemas.evidence import KeyframeRef
+from backend.schemas.evidence import KeyframeRef, OCRFrameRef
 from backend.services.ingestion.video_ingestor import new_verification_id
 from backend.services.preprocessing.ffmpeg import PreprocessingError, preprocess
-from backend.services.preprocessing.frame_sampler import sample_ocr_frames
+from backend.services.preprocessing.frame_sampler import ocr_frame_refs, sample_ocr_frames
 from backend.services.preprocessing.keyframes import (
     FALLBACK_REASON,
     SCENE_REASON,
@@ -229,6 +229,34 @@ def test_ocr_frames_15s_video_capped_at_15(settings, tmp_path):
     ocr = sample_ocr_frames(video, new_verification_id(), settings=settings)
 
     assert len(ocr) == 15
+
+
+def test_ocr_frame_refs_timestamps_follow_1fps_t0_contract(settings, tmp_path):
+    """§4.4 seam: ref timestamps are the fps=1 / t=0 sample times (sample i at
+    t=i), and the ref set matches the sampler's path set exactly."""
+    video = _static_video(tmp_path)
+    ver_id = new_verification_id()
+
+    refs = ocr_frame_refs(video, ver_id, settings=settings)
+    paths = sample_ocr_frames(video, ver_id, settings=settings)
+
+    assert len(refs) == 6  # 6 s clip at 1 fps
+    assert all(isinstance(ref, OCRFrameRef) for ref in refs)
+    assert [ref.local_path for ref in refs] == paths  # same ordered set
+    assert [ref.timestamp_sec for ref in refs] == [0.0, 1.0, 2.0, 3.0, 4.0, 5.0]
+    assert all("/ocr_frames/" in ref.local_path for ref in refs)
+
+
+def test_ocr_frame_refs_deterministic_and_capped_at_15(settings, tmp_path):
+    video = _static_video(tmp_path, "static15.mp4", duration=15.0)
+    ver_id = new_verification_id()
+
+    first = ocr_frame_refs(video, ver_id, settings=settings)
+    second = ocr_frame_refs(video, ver_id, settings=settings)
+
+    assert first == second
+    assert len(first) == 15  # fps=1 from t=0 on 15 s: 15 samples, cap enforced
+    assert [ref.timestamp_sec for ref in first] == [float(i) for i in range(15)]
 
 
 def test_keyframe_and_ocr_frame_sets_are_disjoint(settings, tmp_path):

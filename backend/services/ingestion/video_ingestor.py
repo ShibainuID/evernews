@@ -50,6 +50,36 @@ class MediaProbeUnavailableError(IngestionError):
     """ffprobe is not installed; validation cannot run — fail closed."""
 
 
+_JPEG_MAGIC = b"\xff\xd8\xff"
+_PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+_WEBP_MAGIC = b"RIFF"
+_IMAGE_EXTENSIONS = {".jpg": _JPEG_MAGIC, ".png": _PNG_MAGIC, ".webp": _WEBP_MAGIC}
+
+
+def detect_media_kind(header: bytes) -> str:
+    """Classify the first bytes of a media file: ``video``, ``image``, or ``unknown``.
+
+    Images (JPEG/PNG/WebP) are accepted alongside MP4; anything else — text,
+    archives, audio-only containers — is ``unknown`` and rejected.
+    """
+    if header[:3] == _JPEG_MAGIC:
+        return "image"
+    if header[:8] == _PNG_MAGIC:
+        return "image"
+    if header[:4] == _WEBP_MAGIC and header[8:12] == b"WEBP":
+        return "image"
+    if len(header) >= 12 and header[4:8] == b"ftyp":
+        return "video"
+    return "unknown"
+
+
+def is_image_file(path: Path | str) -> bool:
+    """True when ``path`` begins with a supported image magic (never decodes)."""
+    with open(path, "rb") as handle:
+        header = handle.read(16)
+    return detect_media_kind(header) == "image"
+
+
 def new_verification_id() -> str:
     """Return a fresh generated identifier: ``ver_<uuid4 hex>``."""
     return f"ver_{uuid.uuid4().hex}"
@@ -79,6 +109,25 @@ def _probe_ffprobe(path: Path, settings: Settings) -> dict:
             f"ffprobe cannot read upload as media: {result.stderr.decode(errors='replace')[:300]}"
         )
     return json.loads(result.stdout)
+
+
+def _validate_video(dest: Path, settings: Settings) -> None:
+    """Container magic + ffprobe validation shared by upload and remote fetch."""
+    with dest.open("rb") as handle:
+        header = handle.read(12)
+    if len(header) < 12 or header[4:8] != b"ftyp":
+        raise InvalidVideoError("upload is not an MP4 container (missing ftyp magic)")
+
+    probe = _probe_ffprobe(dest, settings)
+    streams = probe.get("streams", [])
+    if not any(s.get("codec_type") == "video" for s in streams):
+        raise InvalidVideoError("upload has no video stream (audio-only file)")
+    duration = float(probe.get("format", {}).get("duration") or 0.0)
+    if duration > settings.max_video_duration_sec:
+        raise InvalidVideoError(
+            f"video duration {duration:.2f}s exceeds MAX_VIDEO_DURATION_SEC="
+            f"{settings.max_video_duration_sec}"
+        )
 
 
 def save_upload(file, ver_id: str, settings: Settings | None = None) -> Path:
@@ -114,24 +163,83 @@ def save_upload(file, ver_id: str, settings: Settings | None = None) -> Path:
                     )
                 out.write(chunk)
 
-        # Container magic: MP4 starts with a 4-byte big-endian size + "ftyp".
-        # Read exactly the 12-byte header; never load the whole file.
+        # Container magic: MP4 starts with a 4-byte big-endian size + "ftyp",
+        # images carry their own magic (JPEG/PNG/WebP). Read exactly 16 bytes;
+        # never load the whole file.
         with dest.open("rb") as handle:
-            header = handle.read(12)
-        if len(header) < 12 or header[4:8] != b"ftyp":
-            raise InvalidVideoError("upload is not an MP4 container (missing ftyp magic)")
-
-        probe = _probe_ffprobe(dest, settings)
-        streams = probe.get("streams", [])
-        if not any(s.get("codec_type") == "video" for s in streams):
-            raise InvalidVideoError("upload has no video stream (audio-only file)")
-        duration = float(probe.get("format", {}).get("duration") or 0.0)
-        if duration > settings.max_video_duration_sec:
+            header = handle.read(16)
+        kind = detect_media_kind(header)
+        if kind == "image":
+            ext = next(ext for ext, magic in _IMAGE_EXTENSIONS.items() if header[: len(magic)] == magic)
+            dest = dest.rename(dest_dir / f"original{ext}")
+        elif kind == "video":
+            _validate_video(dest, settings)
+        else:
             raise InvalidVideoError(
-                f"video duration {duration:.2f}s exceeds MAX_VIDEO_DURATION_SEC="
-                f"{settings.max_video_duration_sec}"
+                "upload is not an MP4 video or a supported image (JPEG/PNG/WebP)"
             )
     except Exception:
         shutil.rmtree(dest_dir, ignore_errors=True)  # ponytail: best-effort cleanup
         raise
+    return dest
+
+
+class RemoteVideoFetchError(IngestionError):
+    """The remote URL failed to fetch or was not an MP4 video."""
+
+
+async def save_remote_video(
+    url: str,
+    ver_id: str,
+    settings: Settings | None = None,
+    *,
+    fetch=None,
+    timeout_sec: float = 60.0,
+) -> Path:
+    """SSRF-guarded download of a direct video URL into ``WORKDIR/{ver_id}/original.mp4``.
+
+    Same trust boundary as ``save_upload``: the client URL can never become a
+    path or shell argument; the file is written to the generated per-verification
+    directory, capped at ``max_video_size_mb``, then validated by the same
+    magic + ffprobe checks. ``fetch`` defaults to ``utils.fetch.safe_fetch``
+    (http/https only, public-IP only); tests inject a fake. YouTube/TikTok
+    pages are HTML, not videos, so ffprobe rejects them — only direct media
+    links (e.g. ``*.mp4``) work.
+    """
+    from backend.utils.fetch import safe_fetch  # local import: avoids import cycle
+    from backend.utils.fetch import SafeFetchResult
+
+    if settings is None:
+        settings = Settings()
+    if _VER_ID_RE.fullmatch(ver_id) is None:
+        raise UnsafeVerificationIdError(
+            f"unsafe verification id {ver_id!r}; expected generated 'ver_<uuid4 hex>'"
+        )
+
+    fetcher = fetch or safe_fetch
+    max_bytes = settings.max_video_size_mb * 1024 * 1024
+
+    dest_dir = Path(settings.workdir) / ver_id
+    dest = dest_dir / "original.mp4"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        result: SafeFetchResult = await fetcher(url, timeout=timeout_sec, max_bytes=max_bytes)
+        if result.status < 200 or result.status >= 300:
+            raise RemoteVideoFetchError(
+                f"video URL returned HTTP {result.status} (expected 2xx)"
+            )
+        if result.truncated:
+            raise RemoteVideoFetchError(
+                f"video URL exceeds MAX_VIDEO_SIZE_MB={settings.max_video_size_mb}"
+            )
+        with dest.open("wb") as out:
+            out.write(result.body)
+        _validate_video(dest, settings)
+    except IngestionError:
+        shutil.rmtree(dest_dir, ignore_errors=True)
+        raise
+    except Exception as exc:  # UnsafeURLError, FetchError, httpx errors, etc.
+        shutil.rmtree(dest_dir, ignore_errors=True)
+        raise RemoteVideoFetchError(f"could not fetch video URL: {exc}") from exc
     return dest

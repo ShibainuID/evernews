@@ -46,8 +46,8 @@ PROMPT_PATH = Path(__file__).resolve().parents[2] / "prompts" / "planner.txt"
 
 _MAX_FACT_CHECK_TASKS = 1
 _MAX_VISUAL_SEARCH_TASKS = 1
-_MAX_SEARCHES = 4  # WebResearchTask.max_searches schema default
-_MAX_PAGES = 6  # WebResearchTask.max_pages schema default
+_MAX_SEARCHES = 2  # WebResearchTask.max_searches schema default
+_MAX_PAGES = 3  # WebResearchTask.max_pages schema default
 _MAX_CANDIDATES_PER_FRAME = 10  # VisualSearchTask.max_candidates_per_frame default
 
 _DEFAULT_STOP_CONDITION = (

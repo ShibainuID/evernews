@@ -41,12 +41,13 @@ from backend.providers.base import (
     WebResearchProvider,
 )
 from backend.schemas.context import OCRHit, SpeechExtraction, VisualObservation
-from backend.schemas.evidence import KeyframeRef
+from backend.schemas.evidence import KeyframeRef, OCRFrameRef
 from backend.schemas.investigation import RawValidationBundle, VisualSearchTask, VisualWebCandidate
 from backend.schemas.result import VerificationResult
 from backend.services.context import context_fuser, visual_extractor
 from backend.services.evidence import comparator, normalizer, source_ranker, synthesizer
-from backend.services.preprocessing import ffmpeg, keyframes
+from backend.services.ingestion.video_ingestor import is_image_file
+from backend.services.preprocessing import ffmpeg, frame_sampler, keyframes
 from backend.services.result import result_builder
 from backend.services.validation import orchestrator, planner
 from backend.services.validation.cache import QueryCache
@@ -120,9 +121,9 @@ def _speech_worker(speech: SpeechProvider, audio_path: str) -> SpeechExtraction:
     return asyncio.run(speech.transcribe(audio_path))
 
 
-def _ocr_worker(ocr: OCRExtractor, frame_paths: list[str]) -> list[OCRHit]:
-    """Child entry point: OCR over the extracted keyframe images."""
-    return ocr.extract(frame_paths)
+def _ocr_worker(ocr: OCRExtractor, frames: list[OCRFrameRef]) -> list[OCRHit]:
+    """Child entry point: OCR over the dedicated ~1 fps sampled frame set."""
+    return ocr.extract(frames)
 
 
 def _child_target(child, worker: Callable[..., Any], args: tuple[Any, ...]) -> None:
@@ -178,12 +179,12 @@ async def _extract_speech(providers: Providers, audio_path: str) -> SpeechExtrac
     return await providers.speech.transcribe(audio_path)
 
 
-async def _extract_ocr(providers: Providers, frame_paths: list[str]) -> list[OCRHit]:
+async def _extract_ocr(providers: Providers, frames: list[OCRFrameRef]) -> list[OCRHit]:
     if providers.isolated:
         return await asyncio.to_thread(
-            _run_child, _ocr_worker, (providers.ocr, frame_paths), OCR_TIMEOUT_SEC
+            _run_child, _ocr_worker, (providers.ocr, frames), OCR_TIMEOUT_SEC
         )
-    return providers.ocr.extract(frame_paths)
+    return providers.ocr.extract(frames)
 
 
 def _visual_runner(providers: Providers, keyframe_refs: list[KeyframeRef]):
@@ -266,8 +267,20 @@ async def run_verification(
             # ----- Part 1: preprocessing (T19) + keyframes (T20) -----
             _enter(ver_id, "preprocessing")
             _t0 = time.perf_counter()
-            artifacts = ffmpeg.preprocess(ver_id, request.video_path, settings)
-            keyframe_refs = keyframes.select_keyframes(artifacts.normalized_path, ver_id, settings)
+            # Images skip ffmpeg entirely: the image itself is the only keyframe.
+            is_image = is_image_file(request.video_path)
+            if is_image:
+                keyframe_refs = [
+                    KeyframeRef(
+                        frame_id=f"{ver_id}_kf000",
+                        timestamp_sec=0.0,
+                        local_path=str(request.video_path),
+                        selection_reason="single_image_upload",
+                    )
+                ]
+            else:
+                artifacts = ffmpeg.preprocess(ver_id, request.video_path, settings)
+                keyframe_refs = keyframes.select_keyframes(artifacts.normalized_path, ver_id, settings)
             log_event(
                 ver_id,
                 "preprocessing",
@@ -275,36 +288,50 @@ async def run_verification(
                 _elapsed_ms(_t0),
                 "success",
                 keyframes=len(keyframe_refs),
+                media="image" if is_image else "video",
             )
 
             # ----- context extraction (T24/T25/T22/T23): heavy providers isolated -----
             _enter(ver_id, "extracting_context")
+            if is_image:
+                # images have no audio track: empty speech, not an error (§26)
+                speech = SpeechExtraction()
+            else:
+                try:
+                    _t0 = time.perf_counter()
+                    speech = await _extract_speech(providers, str(artifacts.audio_path))
+                    log_event(
+                        ver_id,
+                        "extracting_context",
+                        "speech",
+                        _elapsed_ms(_t0),
+                        "success",
+                        segments=len(speech.segments),
+                    )
+                except Exception as exc:
+                    speech = SpeechExtraction()  # §26: whisper failure -> empty speech, continue
+                    unresolved_notes.append(f"speech extraction failed: {exc}")
+                    log_event(
+                        ver_id, "extracting_context", "speech", _elapsed_ms(_t0), "error", degraded=True
+                    )
             try:
                 _t0 = time.perf_counter()
-                speech = await _extract_speech(providers, str(artifacts.audio_path))
-                log_event(
-                    ver_id,
-                    "extracting_context",
-                    "speech",
-                    _elapsed_ms(_t0),
-                    "success",
-                    segments=len(speech.segments),
+                # §4.4: OCR uses its own ~1 fps sampled set, never the visual
+                # keyframes — overlay text changes while scenes stay static.
+                # For an image the set is the image itself at t=0.
+                ocr_refs = (
+                    [OCRFrameRef(local_path=str(request.video_path), timestamp_sec=0.0)]
+                    if is_image
+                    else frame_sampler.ocr_frame_refs(artifacts.normalized_path, ver_id, settings)
                 )
-            except Exception as exc:
-                speech = SpeechExtraction()  # §26: whisper failure -> empty speech, continue
-                unresolved_notes.append(f"speech extraction failed: {exc}")
-                log_event(
-                    ver_id, "extracting_context", "speech", _elapsed_ms(_t0), "error", degraded=True
-                )
-            try:
-                _t0 = time.perf_counter()
-                ocr = await _extract_ocr(providers, [ref.local_path for ref in keyframe_refs])
+                ocr = await _extract_ocr(providers, ocr_refs)
                 log_event(
                     ver_id,
                     "extracting_context",
                     "ocr",
                     _elapsed_ms(_t0),
                     "success",
+                    frames=len(ocr_refs),
                     hits=len(ocr),
                 )
             except Exception as exc:

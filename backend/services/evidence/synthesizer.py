@@ -226,6 +226,27 @@ def _conflict_note(claims: _SynthesisClaims) -> str:
 # --- entry point ---
 
 
+def _insufficient(
+    context: VideoContext,
+    bundle: RawValidationBundle,
+    unresolved: list[str],
+    summary: str,
+) -> SynthesizedEvidence:
+    """Honest ``insufficient`` result; the shared fallback for both no-provider
+    and unparseable-provider-output cases."""
+    return SynthesizedEvidence(
+        verification_id=context.verification_id,
+        event_web_finding="insufficient",
+        existing_fact_checks_found=bool(bundle.fact_checks),
+        visual_match="unknown",
+        supporting_evidence_ids=[],
+        contradicting_evidence_ids=[],
+        conflicts=[],
+        unresolved=unresolved,
+        synthesis_summary=summary,
+    )
+
+
 async def synthesize(
     context: VideoContext,
     bundle: RawValidationBundle,
@@ -235,23 +256,19 @@ async def synthesize(
     """Bundle + ranked sources -> SynthesizedEvidence via one text-only Luna call.
 
     The provider owns its single schema-repair attempt; this function calls
-    ``structured`` exactly once and fails clearly on invalid output rather
-    than inventing IDs. Without a provider the result is honestly
+    ``structured`` exactly once and, if that output still fails validation,
+    degrades to an honest ``insufficient`` result rather than inventing IDs
+    or crashing the verification. Without a provider the result is the same
     ``insufficient`` (plan interface: ``synthesize(context, bundle, ranked_sources)``).
     """
     known = _known_evidence_ids(bundle)
 
     if luna_provider is None:
-        return SynthesizedEvidence(
-            verification_id=context.verification_id,
-            event_web_finding="insufficient",
-            existing_fact_checks_found=bool(bundle.fact_checks),
-            visual_match="unknown",
-            supporting_evidence_ids=[],
-            contradicting_evidence_ids=[],
-            conflicts=[],
+        return _insufficient(
+            context,
+            bundle,
             unresolved=["evidence synthesizer: no provider available"],
-            synthesis_summary="Synthesis could not be produced: no reasoning provider was available.",
+            summary="Synthesis could not be produced: no reasoning provider was available.",
         )
 
     prompt = PROMPT.format(
@@ -259,8 +276,22 @@ async def synthesize(
         evidence=_render_evidence(bundle),
         sources=_render_sources(ranked_sources),
     )
-    claims = await luna_provider.structured(prompt, _SynthesisClaims)
-    validate_synthesis(claims, known)
+    try:
+        claims = await luna_provider.structured(prompt, _SynthesisClaims)
+        validate_synthesis(claims, known)
+    except StructuredOutputError:
+        # ponytail: after the provider's own single repair attempt, unparseable
+        # output degrades to an honest "insufficient" instead of failing the
+        # whole verification (typical when evidence is thin or missing).
+        return _insufficient(
+            context,
+            bundle,
+            unresolved=["evidence synthesizer: structured output failed validation"],
+            summary=(
+                "Synthesis could not be produced: the reasoning model did not "
+                "return output matching the evidence contract."
+            ),
+        )
 
     finding = claims.event_web_finding
     if claims.supporting_evidence_ids and claims.contradicting_evidence_ids:

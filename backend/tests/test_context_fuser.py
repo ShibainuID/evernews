@@ -48,6 +48,22 @@ def _claim_dict(
     }
 
 
+def _claim_dict_without_explicit(
+    value: str,
+    evidence_ids: list[str],
+    confidence: float = 0.9,
+    normalized: str | None = None,
+) -> dict[str, Any]:
+    """Real-model shape: the prompt never asks for ``explicitly_claimed``, so a
+    compliant model omits it; the field is decided locally, not trusted."""
+    return {
+        "value": value,
+        "normalized_value": normalized,
+        "confidence": confidence,
+        "evidence_ids": evidence_ids,
+    }
+
+
 def _claims_response(
     event: dict[str, Any],
     location: dict[str, Any],
@@ -333,6 +349,36 @@ async def test_claims_schema_rejects_extra_fields_like_a_verdict():
             now=NOW,
             luna_provider=provider,
         )
+
+
+async def test_claims_omitting_explicitly_claimed_still_validate_and_decide_locally():
+    """A real model compliant with the prompt omits ``explicitly_claimed`` (the
+    prompt never asks for it); the field is decided locally, never trusted."""
+    provider = FakeLunaProvider(
+        [
+            _claims_response(
+                event=_claim_dict_without_explicit("flood", ["caption_01"]),
+                location=_claim_dict_without_explicit("Jakarta", ["caption_01"]),
+                time=_claim_dict_without_explicit("today", ["caption_01"]),
+            )
+        ]
+    )
+
+    context = await fuse(
+        ver_id="ver_123",
+        caption="Jakarta flood today",
+        speech=SpeechExtraction(),
+        ocr=[],
+        visual=VisualObservation(),
+        keyframes=[_kf()],
+        now=NOW,
+        luna_provider=provider,
+    )
+
+    assert context.event.value == "flood"
+    assert context.event.explicitly_claimed is True  # decided locally from atoms
+    assert context.location.explicitly_claimed is True
+    assert context.time.explicitly_claimed is True
 
 
 # --- no web verification ---

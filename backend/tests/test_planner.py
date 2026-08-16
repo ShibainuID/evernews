@@ -439,7 +439,7 @@ async def test_web_budgets_and_visual_candidates_clamped_to_schema_bounds(monkey
     plan = await create_plan(_id_context(), provider, settings=_default_settings(monkeypatch))
 
     web = plan.web_research_tasks[0]
-    assert web.max_searches == 4  # clamped to schema default
+    assert web.max_searches == 2  # clamped to schema default
     assert web.max_pages == 1  # clamped to schema default, never below 1
     assert web.task_id == "web_01"  # valid structured fields preserved
     assert web.preferred_source_types == ["news"]
@@ -459,7 +459,7 @@ def test_render_prompt_includes_context_and_config_bounds(monkeypatch):
     assert "banjir Jakarta hari ini" in prompt  # transcript
     assert "kf_01" in prompt
     assert "(max 3 tasks)" in prompt  # MAX_WEB_RESEARCH_TASKS rendered
-    assert "At most 4 queries per task." in prompt  # MAX_QUERIES_PER_TASK rendered
+    assert "At most 2 queries per task." in prompt  # MAX_QUERIES_PER_TASK rendered
 
 
 def test_planner_prompt_has_no_truth_or_verdict_bias():
