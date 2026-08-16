@@ -175,6 +175,7 @@ async def create_verification(video: UploadFile, caption: str = Form(default="")
         verification_id=ver_id,
         classification=classification,
         evidence_confidence=evidence_confidence(confidence_components),
+        confidence_score=round(sum(confidence_components.values()) / len(confidence_components) * 100),
         current_context=context,
         source_context=source_context,
         comparison=comparison,

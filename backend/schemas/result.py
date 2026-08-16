@@ -102,6 +102,10 @@ class VerificationResult(BaseModel):
     classification: ResultClassification
 
     evidence_confidence: ConfidenceLabel
+    # 0-100 display figure derived from the same internal component scores
+    # that produce `evidence_confidence`; presentation only, never a substitute
+    # for the controlled label
+    confidence_score: int | None = None
 
     current_context: VideoContext
     source_context: SourceContext | None = None
