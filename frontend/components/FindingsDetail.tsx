@@ -110,13 +110,7 @@ export function FindingsDetail({
   }
 
   return (
-    <motion.section
-      className="space-y-4"
-      variants={container}
-      initial="hidden"
-      animate="visible"
-      exit={{ opacity: 0, y: reduceMotion ? 0 : -8, transition: { duration: 0.2 } }}
-    >
+    <motion.section className="space-y-4" variants={container} initial="hidden" animate="visible">
       <motion.div variants={item} className="rounded-card bg-white p-5">
         <div
           className={`mx-auto w-fit rounded-full border px-4 py-1.5 text-center text-base font-bold ${pill.className}`}
