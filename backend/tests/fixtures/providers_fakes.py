@@ -11,6 +11,7 @@ from typing import Any, Callable, TypeVar
 from pydantic import BaseModel, ValidationError
 
 from backend.schemas.context import OCRHit, SpeechExtraction
+from backend.schemas.evidence import OCRFrameRef
 from backend.schemas.investigation import (
     VisualWebCandidate,
     WebResearchResult,
@@ -46,7 +47,7 @@ class FakeOCRExtractor:
     def __init__(self, script: list[list[OCRHit] | Exception]):
         self._script = list(script)
 
-    def extract(self, frame_paths: list[str]) -> list[OCRHit]:
+    def extract(self, frames: list[OCRFrameRef]) -> list[OCRHit]:
         return _next_scripted(self._script, "FakeOCRExtractor")
 
 

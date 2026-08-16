@@ -13,6 +13,7 @@ import pytest
 from backend.config import Settings
 from backend.providers.base import OCRExtractor
 from backend.providers.paddleocr import OCRFrameError, PaddleOCRProvider
+from backend.schemas.evidence import OCRFrameRef
 
 
 class _StubModel:
@@ -58,16 +59,17 @@ def _result(texts=None, scores=None, boxes=None) -> dict:
     }
 
 
-def _frame_paths(tmp_path, count: int) -> list[str]:
-    """frame_sampler-style paths: ``ocr_frames/frame_NN.jpg``, 1 fps from t=0."""
+def _frame_refs(tmp_path, count: int) -> list[OCRFrameRef]:
+    """frame_sampler-style refs: ``ocr_frames/frame_NN.jpg`` at 1 fps from t=0,
+    so ref index == sampling-contract timestamp in seconds."""
     ocr_dir = tmp_path / "ocr_frames"
     ocr_dir.mkdir(exist_ok=True)
-    paths = []
-    for i in range(1, count + 1):
-        frame = ocr_dir / f"frame_{i:02d}.jpg"
+    refs = []
+    for i in range(count):
+        frame = ocr_dir / f"frame_{i + 1:02d}.jpg"
         frame.write_bytes(b"fake-jpeg")
-        paths.append(str(frame))
-    return paths
+        refs.append(OCRFrameRef(local_path=str(frame), timestamp_sec=float(i)))
+    return refs
 
 
 # --- contract ---
@@ -85,7 +87,9 @@ def test_extract_missing_frame_raises_clear_error_without_model_load(tmp_path):
     provider = PaddleOCRProvider(model_factory=factory)
 
     with pytest.raises(OCRFrameError, match="not found"):
-        provider.extract([str(tmp_path / "ocr_frames" / "frame_01.jpg")])
+        provider.extract(
+            [OCRFrameRef(local_path=str(tmp_path / "ocr_frames" / "frame_01.jpg"), timestamp_sec=0.0)]
+        )
 
     assert factory.calls == []
 
@@ -97,7 +101,7 @@ def test_extract_frames_without_text_yields_empty_list(tmp_path):
     model = _StubModel(_result())
     provider = PaddleOCRProvider(model_factory=_ScriptedFactory([model]))
 
-    assert provider.extract(_frame_paths(tmp_path, 2)) == []
+    assert provider.extract(_frame_refs(tmp_path, 2)) == []
     assert len(model.predict_calls) == 2
 
 
@@ -121,12 +125,15 @@ def test_extract_dedupes_consecutive_repeated_overlay_text(tmp_path):
     )
     provider = PaddleOCRProvider(model_factory=_ScriptedFactory([model]))
 
-    hits = provider.extract(_frame_paths(tmp_path, 3))
+    hits = provider.extract(_frame_refs(tmp_path, 3))
 
     # "JAKARTA" appears in every frame; normalized it is the same overlay, so
     # only the first raw hit is kept (case/whitespace differences collapse).
     assert [h.text for h in hits] == ["JAKARTA", "BANJIR", "KOORDINAT"]
     assert [h.frame_id for h in hits] == ["frame_01", "frame_01", "frame_02"]
+    # timestamps come from the refs' sampling-contract times (1 fps, t=0):
+    # frame_01 is at t=0, frame_02 at t=1.
+    assert [h.timestamp_sec for h in hits] == [0.0, 0.0, 1.0]
     assert hits[0].confidence == 0.97  # raw hit preserved
     assert hits[0].bbox == [[10.0, 5.0, 200.0, 60.0]]  # bbox passed through
 
@@ -142,7 +149,7 @@ def test_extract_keeps_overlay_reappearing_after_a_gap(tmp_path):
     )
     provider = PaddleOCRProvider(model_factory=_ScriptedFactory([model]))
 
-    hits = provider.extract(_frame_paths(tmp_path, 3))
+    hits = provider.extract(_frame_refs(tmp_path, 3))
 
     assert [h.text for h in hits] == ["JAKARTA", "BANJIR", "JAKARTA"]
     assert hits[-1].frame_id == "frame_03"  # re-appearance kept as raw evidence
@@ -157,7 +164,7 @@ def test_extract_reports_low_confidence_hit_unmodified(tmp_path):
     )
     provider = PaddleOCRProvider(model_factory=_ScriptedFactory([model]))
 
-    hits = provider.extract(_frame_paths(tmp_path, 1))
+    hits = provider.extract(_frame_refs(tmp_path, 1))
 
     assert len(hits) == 1  # low-confidence OCR is evidence, kept for the fuser's policy
     assert hits[0].text == "JAKARTA"
@@ -172,7 +179,7 @@ def test_extract_passes_bounding_boxes_through(tmp_path):
     model = _StubModel(_result(["JAKARTA", "BANJIR"], [0.97, 0.91], boxes))
     provider = PaddleOCRProvider(model_factory=_ScriptedFactory([model]))
 
-    hits = provider.extract(_frame_paths(tmp_path, 1))
+    hits = provider.extract(_frame_refs(tmp_path, 1))
 
     # One hit per detected line; each hit carries that line's single box.
     assert [h.bbox for h in hits] == [[boxes[0]], [boxes[1]]]
@@ -186,7 +193,7 @@ def test_provider_defaults_lang_from_settings(monkeypatch, tmp_path):
     factory = _ScriptedFactory([_StubModel(_result())])
     provider = PaddleOCRProvider(model_factory=factory)  # no explicit lang
 
-    provider.extract(_frame_paths(tmp_path, 1))
+    provider.extract(_frame_refs(tmp_path, 1))
 
     assert Settings().ocr_lang == "en"
     assert factory.calls == ["en"]
@@ -197,6 +204,25 @@ def test_explicit_lang_overrides_settings(monkeypatch, tmp_path):
     factory = _ScriptedFactory([_StubModel(_result())])
     provider = PaddleOCRProvider(lang="id", model_factory=factory)
 
-    provider.extract(_frame_paths(tmp_path, 1))
+    provider.extract(_frame_refs(tmp_path, 1))
 
     assert factory.calls == ["id"]
+
+
+def test_extract_uses_ref_timestamps_not_list_index(tmp_path):
+    """Hits carry the caller-provided sampling-contract time, never the frame's
+    position in the list — a keyframe-indexed timestamp would be wrong here."""
+    box = [[10.0, 5.0, 200.0, 60.0]]
+    model = _StubModel(
+        _result(["JAKARTA"], [0.97], [box[0]]),
+        _result(["BANJIR"], [0.91], [box[0]]),
+    )
+    provider = PaddleOCRProvider(model_factory=_ScriptedFactory([model]))
+    refs = [
+        OCRFrameRef(local_path=r.local_path, timestamp_sec=r.timestamp_sec + 10.0)
+        for r in _frame_refs(tmp_path, 2)
+    ]
+
+    hits = provider.extract(refs)
+
+    assert [h.timestamp_sec for h in hits] == [10.0, 11.0]

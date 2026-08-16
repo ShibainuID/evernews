@@ -43,6 +43,15 @@ class KeyframeRef(BaseModel):
     selection_reason: str | None = None
 
 
+class OCRFrameRef(BaseModel):
+    """One OCR sample from the dedicated ~1 fps set (HANDOFF §4.4): the frame
+    file plus its sampling-contract timestamp (fps=1 aligned at t=0), so OCR
+    hits never inherit visual-keyframe times."""
+
+    local_path: str
+    timestamp_sec: float
+
+
 class EvidenceAtom(BaseModel):
     evidence_id: str
     type: EvidenceType

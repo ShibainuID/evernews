@@ -12,6 +12,7 @@ from typing import Protocol, TypeVar, runtime_checkable
 from pydantic import BaseModel
 
 from backend.schemas.context import OCRHit, SpeechExtraction
+from backend.schemas.evidence import OCRFrameRef
 from backend.schemas.investigation import (
     VisualWebCandidate,
     WebResearchResult,
@@ -30,9 +31,14 @@ class SpeechProvider(Protocol):
 
 @runtime_checkable
 class OCRExtractor(Protocol):
-    """Local OCR over frame images (HANDOFF §5.2). Empty list is valid."""
+    """Local OCR over frame images (HANDOFF §5.2). Empty list is valid.
 
-    def extract(self, frame_paths: list[str]) -> list[OCRHit]: ...
+    Each ``OCRFrameRef`` carries the sampled frame path plus its
+    sampling-contract timestamp (fps=1 aligned at t=0, HANDOFF §4.4), so hits
+    are time-stamped from the actual sample times, never a list index.
+    """
+
+    def extract(self, frames: list[OCRFrameRef]) -> list[OCRHit]: ...
 
 
 @runtime_checkable

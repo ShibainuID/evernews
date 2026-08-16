@@ -41,12 +41,12 @@ from backend.providers.base import (
     WebResearchProvider,
 )
 from backend.schemas.context import OCRHit, SpeechExtraction, VisualObservation
-from backend.schemas.evidence import KeyframeRef
+from backend.schemas.evidence import KeyframeRef, OCRFrameRef
 from backend.schemas.investigation import RawValidationBundle, VisualSearchTask, VisualWebCandidate
 from backend.schemas.result import VerificationResult
 from backend.services.context import context_fuser, visual_extractor
 from backend.services.evidence import comparator, normalizer, source_ranker, synthesizer
-from backend.services.preprocessing import ffmpeg, keyframes
+from backend.services.preprocessing import ffmpeg, frame_sampler, keyframes
 from backend.services.result import result_builder
 from backend.services.validation import orchestrator, planner
 from backend.services.validation.cache import QueryCache
@@ -120,9 +120,9 @@ def _speech_worker(speech: SpeechProvider, audio_path: str) -> SpeechExtraction:
     return asyncio.run(speech.transcribe(audio_path))
 
 
-def _ocr_worker(ocr: OCRExtractor, frame_paths: list[str]) -> list[OCRHit]:
-    """Child entry point: OCR over the extracted keyframe images."""
-    return ocr.extract(frame_paths)
+def _ocr_worker(ocr: OCRExtractor, frames: list[OCRFrameRef]) -> list[OCRHit]:
+    """Child entry point: OCR over the dedicated ~1 fps sampled frame set."""
+    return ocr.extract(frames)
 
 
 def _child_target(child, worker: Callable[..., Any], args: tuple[Any, ...]) -> None:
@@ -178,12 +178,12 @@ async def _extract_speech(providers: Providers, audio_path: str) -> SpeechExtrac
     return await providers.speech.transcribe(audio_path)
 
 
-async def _extract_ocr(providers: Providers, frame_paths: list[str]) -> list[OCRHit]:
+async def _extract_ocr(providers: Providers, frames: list[OCRFrameRef]) -> list[OCRHit]:
     if providers.isolated:
         return await asyncio.to_thread(
-            _run_child, _ocr_worker, (providers.ocr, frame_paths), OCR_TIMEOUT_SEC
+            _run_child, _ocr_worker, (providers.ocr, frames), OCR_TIMEOUT_SEC
         )
-    return providers.ocr.extract(frame_paths)
+    return providers.ocr.extract(frames)
 
 
 def _visual_runner(providers: Providers, keyframe_refs: list[KeyframeRef]):
@@ -298,13 +298,19 @@ async def run_verification(
                 )
             try:
                 _t0 = time.perf_counter()
-                ocr = await _extract_ocr(providers, [ref.local_path for ref in keyframe_refs])
+                # §4.4: OCR uses its own ~1 fps sampled set, never the visual
+                # keyframes — overlay text changes while scenes stay static.
+                ocr_refs = frame_sampler.ocr_frame_refs(
+                    artifacts.normalized_path, ver_id, settings
+                )
+                ocr = await _extract_ocr(providers, ocr_refs)
                 log_event(
                     ver_id,
                     "extracting_context",
                     "ocr",
                     _elapsed_ms(_t0),
                     "success",
+                    frames=len(ocr_refs),
                     hits=len(ocr),
                 )
             except Exception as exc:
