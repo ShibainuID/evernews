@@ -12,8 +12,6 @@ _EVENT_CANONICAL = {
     "flooding": "flood",
     "major flood": "flood",
     "banjir": "flood",
-    "protest": "protest",
-    "unjuk rasa": "protest",
 }
 
 # ponytail: alias+parent tables are data, not logic; expand as consumers need.
