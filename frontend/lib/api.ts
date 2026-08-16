@@ -60,7 +60,7 @@ export interface VerificationResult {
   warnings: string[];
 }
 
-// Mirrors backend/state.py's STAGES tuple — real pipeline stages, not a
+// Mirrors backend/state.py's STAGES tuple, real pipeline stages, not a
 // fixed animation timer.
 export type VerificationStage =
   | "queued"
@@ -105,7 +105,7 @@ export async function startVerification(file: File, caption: string): Promise<{ 
 
   const res = await fetch(VERIFICATION_PATH, { method: "POST", body });
   if (!res.ok) {
-    throw new VerificationError(await readErrorDetail(res, "That clip didn't make it through — try again."), res.status);
+    throw new VerificationError(await readErrorDetail(res, "That clip didn't make it through, try again."), res.status);
   }
   return res.json();
 }
@@ -113,7 +113,7 @@ export async function startVerification(file: File, caption: string): Promise<{ 
 export async function getVerificationStatus(id: string): Promise<VerificationStatus> {
   const res = await fetch(`${VERIFICATION_PATH}/${id}`);
   if (!res.ok) {
-    throw new VerificationError(await readErrorDetail(res, "Lost track of that verification — try again."), res.status);
+    throw new VerificationError(await readErrorDetail(res, "Lost track of that verification, try again."), res.status);
   }
   return res.json();
 }
@@ -121,7 +121,7 @@ export async function getVerificationStatus(id: string): Promise<VerificationSta
 export async function getVerificationResult(id: string): Promise<VerificationResult> {
   const res = await fetch(`${VERIFICATION_PATH}/${id}/result`);
   if (!res.ok) {
-    throw new VerificationError(await readErrorDetail(res, "That clip didn't make it through — try again."), res.status);
+    throw new VerificationError(await readErrorDetail(res, "That clip didn't make it through, try again."), res.status);
   }
   return res.json();
 }
@@ -145,9 +145,9 @@ export async function submitVerification(
       return getVerificationResult(verification_id);
     }
     if (status.status === "failed") {
-      throw new VerificationError(status.error ?? "That clip didn't make it through — try again.", 500);
+      throw new VerificationError(status.error ?? "That clip didn't make it through, try again.", 500);
     }
     await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
   }
-  throw new VerificationError("This is taking longer than expected — try again in a bit.", 504);
+  throw new VerificationError("This is taking longer than expected, try again in a bit.", 504);
 }
