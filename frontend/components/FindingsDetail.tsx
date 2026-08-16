@@ -1,24 +1,48 @@
 "use client";
 
 import { useState, type ReactElement } from "react";
-import { Check, TriangleAlert, Minus, Share2 } from "lucide-react";
+import { Check, TriangleAlert, Minus, MoreHorizontal } from "lucide-react";
+import { FaWhatsapp, FaInstagram, FaXTwitter, FaTiktok, FaThreads, FaYoutube, FaFacebook } from "react-icons/fa6";
 import type { ComparisonStatus, DimensionComparison, ResultClassification, VerificationResult } from "@/lib/api";
 
-const BANNER: Record<ResultClassification, { label: string; className: string }> = {
-  possible_false_context: { label: "POTENTIAL MISMATCH", className: "bg-mismatch text-white" },
-  claim_conflict_found: { label: "WORTH A CLOSER LOOK", className: "bg-amber-500 text-white" },
-  source_match_with_incomplete_context: { label: "PARTIAL MATCH FOUND", className: "bg-amber-500 text-white" },
-  context_consistent_with_source: { label: "CONTEXT CHECKS OUT", className: "bg-consistent text-white" },
-  insufficient_evidence: { label: "WE'RE NOT SURE YET", className: "bg-black/70 text-white" },
+export interface YourClipPreview {
+  url: string;
+  isImage: boolean;
+}
+
+const PILL: Record<ResultClassification, { label: string; className: string }> = {
+  possible_false_context: { label: "Potential Information Mismatch", className: "border-mismatch text-mismatch" },
+  claim_conflict_found: { label: "Worth a Closer Look", className: "border-amber-500 text-amber-600" },
+  source_match_with_incomplete_context: {
+    label: "Partial Match Found",
+    className: "border-amber-500 text-amber-600",
+  },
+  context_consistent_with_source: { label: "Context Checks Out", className: "border-consistent text-consistent" },
+  insufficient_evidence: { label: "We're Not Sure Yet", className: "border-black/20 text-black/60" },
 };
 
-const MATCH_LABEL: Record<string, string> = { high: "High match", medium: "Medium match", low: "Low match", unknown: "No match found" };
+const MATCH_LABEL: Record<string, string> = {
+  high: "High match",
+  medium: "Medium match",
+  low: "Low match",
+  unknown: "No match found",
+};
 
 const STATUS_ICON: Record<ComparisonStatus, ReactElement> = {
   consistent: <Check size={16} className="text-consistent" />,
   mismatch: <TriangleAlert size={16} className="text-amber-500" />,
   unknown: <Minus size={16} className="text-black/30" />,
 };
+
+const SHARE_TARGETS = [
+  { Icon: FaWhatsapp, color: "#25D366", label: "WhatsApp" },
+  { Icon: FaInstagram, color: "#E1306C", label: "Instagram" },
+  { Icon: FaXTwitter, color: "#000000", label: "X" },
+  { Icon: FaTiktok, color: "#000000", label: "TikTok" },
+  { Icon: FaThreads, color: "#000000", label: "Threads" },
+  { Icon: FaYoutube, color: "#FF0000", label: "YouTube" },
+  { Icon: FaFacebook, color: "#1877F2", label: "Facebook" },
+];
 
 function DimensionRow({ label, dim }: { label: string; dim: DimensionComparison }) {
   return (
@@ -39,52 +63,108 @@ const MIL_COPY: Record<string, { title: string; body: string }> = {
   },
 };
 
-export function FindingsDetail({ result, onReset }: { result: VerificationResult; onReset: () => void }) {
+function ClipFrame({ children }: { children: React.ReactNode }) {
+  return <div className="aspect-[140/249] w-full overflow-hidden rounded-xl bg-black/5">{children}</div>;
+}
+
+export function FindingsDetail({
+  result,
+  yourClip,
+  onReset,
+}: {
+  result: VerificationResult;
+  yourClip: YourClipPreview | null;
+  onReset: () => void;
+}) {
   const [copied, setCopied] = useState(false);
-  const banner = BANNER[result.classification];
+  const pill = PILL[result.classification];
   const source = result.source_context;
   const lesson = result.manipulation_types[0] ? MIL_COPY[result.manipulation_types[0]] : null;
 
   async function share() {
-    const text = `${banner.label}: ${result.headline}\n\nCurrent claim: ${result.comparison.location.current ?? "unknown"}, ${result.comparison.date.current ?? "unknown"}\nEarliest match: ${source?.location ?? "unknown"}, ${source?.date ?? "unknown"}\nVisual match: ${MATCH_LABEL[result.visual_match]}\n\nChecked with Evernews.`;
+    const text = `${pill.label}\n\n${result.summary}\n\nVisual match: ${MATCH_LABEL[result.visual_match]}\n\nChecked with Evernews.`;
     try {
       await navigator.clipboard.writeText(text);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
-      // ponytail: clipboard can be denied by the browser; the text is still visible on-screen
+      // ponytail: clipboard can be denied by the browser; "Trace another clip" still works either way
     }
   }
 
   return (
     <section className="mx-4 mt-4 space-y-4">
-      <div className={`rounded-card px-5 py-4 ${banner.className}`}>
-        <p className="text-sm font-medium opacity-90">We have found:</p>
-        <p className="text-xl font-extrabold tracking-tight">{banner.label}</p>
-      </div>
-
       <div className="rounded-card bg-white p-5">
-        <h3 className="text-lg font-bold">{result.headline}</h3>
-        <p className="mt-1 text-sm leading-relaxed text-black/70">{result.summary}</p>
-
-        {source && (
-          <div className="mt-4 grid grid-cols-2 gap-3">
-            <div className="rounded-xl bg-black/5 p-3">
-              <p className="text-xs font-semibold uppercase tracking-wide text-black/40">Your Video Clip</p>
-              <p className="mt-1 text-sm font-semibold">{result.comparison.location.current ?? "Unspecified location"}</p>
-              <p className="text-xs text-black/50">{result.comparison.date.current ?? "Unspecified date"}</p>
-            </div>
-            <div className="rounded-xl bg-black/5 p-3">
-              <p className="text-xs font-semibold uppercase tracking-wide text-black/40">Earliest Match Found</p>
-              <p className="mt-1 text-sm font-semibold">{source.location ?? "Unknown"}</p>
-              <p className="text-xs text-black/50">{source.date ?? "Unknown"} · {source.publisher ?? "Unknown publisher"}</p>
-            </div>
-          </div>
+        <div
+          className={`mx-auto w-fit rounded-full border px-4 py-1.5 text-center text-base font-bold ${pill.className}`}
+        >
+          {pill.label}
+        </div>
+        {result.confidence_score != null && (
+          <p className="mt-3 text-center text-sm font-bold">
+            Evernews Confidence Score: <span className="text-brand">{result.confidence_score}/100</span>
+          </p>
         )}
+        <p className="mt-3 text-sm leading-relaxed text-black/70">{result.summary}</p>
 
-        <p className="mt-3 text-xs font-medium text-black/50">
+        <div className="mt-4 grid grid-cols-2 gap-3">
+          <div>
+            <p className="text-center text-xs font-semibold">Original Video</p>
+            <ClipFrame>
+              <div className="flex h-full items-center justify-center p-2 text-center text-[10px] text-black/40">
+                {source?.publisher ?? "No source found"}
+              </div>
+            </ClipFrame>
+            <p className="mt-1 text-center text-[10px] text-black/50">{source?.date ?? "Unknown date"}</p>
+          </div>
+          <div>
+            <p className="text-center text-xs font-semibold">Your {yourClip?.isImage ? "Photo" : "Video Clip"}</p>
+            <ClipFrame>
+              {yourClip ? (
+                yourClip.isImage ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={yourClip.url} alt="" className="h-full w-full object-cover" />
+                ) : (
+                  <video src={yourClip.url} className="h-full w-full object-cover" muted playsInline loop autoPlay />
+                )
+              ) : null}
+            </ClipFrame>
+            <p className="mt-1 text-center text-[10px] text-black/50">Uploaded just now</p>
+          </div>
+        </div>
+
+        <p className="mt-4 text-xs font-medium text-black/50">
           Visual match: <span className="font-semibold text-black/70">{MATCH_LABEL[result.visual_match]}</span>
         </p>
+
+        <div className="mt-4">
+          <p className="text-xs font-semibold text-brand">Share this finding with others:</p>
+          <div className="mt-2 flex items-center gap-1 rounded-full border border-brand/30 px-3 py-2">
+            {SHARE_TARGETS.map(({ Icon, color, label }) => (
+              <button
+                key={label}
+                aria-label={`Share to ${label}`}
+                onClick={share}
+                className="flex h-8 w-8 items-center justify-center rounded-full hover:bg-black/5"
+                style={{ color }}
+              >
+                <Icon size={18} />
+              </button>
+            ))}
+            <button
+              aria-label="Copy finding as text"
+              onClick={share}
+              className="ml-auto flex h-8 w-8 items-center justify-center rounded-full text-black/40 hover:bg-black/5"
+            >
+              <MoreHorizontal size={18} />
+            </button>
+          </div>
+          {copied && <p className="mt-1 text-right text-[10px] font-medium text-brand">Copied to clipboard!</p>}
+        </div>
+
+        <button onClick={onReset} className="mt-4 w-full rounded-full bg-brand py-3 text-sm font-bold text-white">
+          Trace another clip
+        </button>
       </div>
 
       <div className="rounded-card bg-white p-5">
@@ -114,18 +194,6 @@ export function FindingsDetail({ result, onReset }: { result: VerificationResult
           </ul>
         </div>
       )}
-
-      <div className="flex gap-3">
-        <button
-          onClick={share}
-          className="flex flex-1 items-center justify-center gap-2 rounded-full bg-brand py-3 text-sm font-bold text-white"
-        >
-          <Share2 size={16} /> {copied ? "Copied!" : "Share this finding"}
-        </button>
-        <button onClick={onReset} className="rounded-full border border-black/10 px-4 py-3 text-sm font-semibold">
-          Check another
-        </button>
-      </div>
     </section>
   );
 }
