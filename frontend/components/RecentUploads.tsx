@@ -1,9 +1,10 @@
 "use client";
 
 const RECENT = [
-  { title: "Sari Roti Zionist Allegations", from: "#3a3a3a", to: "#6b6b6b" },
-  { title: "Aqua's Water Origin Questioned", from: "#0b3d91", to: "#1f9c8c" },
-  { title: "Student with Pink iPad Controversy", from: "#5e2ca5", to: "#c24d9c" },
+  { title: "Sari Roti Zionist Allegations", image: "/recent/sari-roti.jpg" },
+  { title: "Aqua's Water Origin Questioned", image: "/recent/aqua-water.jpg" },
+  { title: "Student with Pink iPad Controversy", image: "/recent/pink-ipad.jpg" },
+  { title: "Taxi and KRL Crash", image: "/recent/krl-crash.jpg" },
 ];
 
 export function RecentUploads() {
@@ -12,11 +13,10 @@ export function RecentUploads() {
       <h2 className="text-xl font-bold text-white">Your recent uploads and traces</h2>
       <div className="mt-4 flex justify-center gap-3 overflow-x-auto pb-1">
         {RECENT.map((item) => (
-          <div
-            key={item.title}
-            className="relative h-[205px] w-[115px] shrink-0 overflow-hidden rounded-card"
-            style={{ background: `linear-gradient(160deg, ${item.from}, ${item.to})` }}
-          >
+          <div key={item.title} className="relative h-[205px] w-[115px] shrink-0 overflow-hidden rounded-card">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={item.image} alt="" className="h-full w-full object-cover" />
+            <div className="absolute inset-x-0 bottom-0 h-2/3 bg-gradient-to-t from-black/80 to-transparent" />
             <span className="absolute bottom-2 left-2 right-2 text-xs font-semibold leading-tight text-white">
               {item.title}
             </span>

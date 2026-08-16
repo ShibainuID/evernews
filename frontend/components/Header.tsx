@@ -1,6 +1,6 @@
 "use client";
 
-import { Megaphone, Settings, LogOut } from "lucide-react";
+import { Settings, LogOut } from "lucide-react";
 
 export function Header() {
   return (
@@ -8,12 +8,8 @@ export function Header() {
       <div className="flex h-10 w-10 items-center justify-center rounded-full bg-brand text-sm font-semibold text-white">
         GK
       </div>
-      <div className="flex items-center gap-1.5 text-brand">
-        <Megaphone size={20} className="rotate-[-10deg]" />
-        <span className="text-lg font-extrabold tracking-tight">
-          EVER<span className="font-medium">NEWS</span>
-        </span>
-      </div>
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img src="/logo.svg" alt="Evernews" className="h-6 w-auto" />
       <div className="flex items-center text-brand">
         <button aria-label="Settings" className="flex h-11 w-11 items-center justify-center rounded-full hover:bg-black/5">
           <Settings size={20} />
