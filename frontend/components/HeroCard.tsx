@@ -12,6 +12,7 @@ import {
   type VerificationStage,
 } from "@/lib/api";
 import type { YourClipPreview } from "@/components/FindingsDetail";
+import { AnalyzingScene } from "@/components/AnalyzingScene";
 // One consistent, non-bouncy "step forward" feel for every stage change.
 const EASE_OUT_EXPO = [0.16, 1, 0.3, 1] as const;
 
@@ -59,6 +60,7 @@ export function HeroCard({
 }) {
   const [stage, setStage] = useState<Stage>("idle");
   const [stageLabel, setStageLabel] = useState(STAGE_LABELS.uploading);
+  const [currentStage, setCurrentStage] = useState<VerificationStage>("queued");
   const [preview, setPreview] = useState<YourClipPreview | null>(null);
   const [caption, setCaption] = useState("");
   const [link, setLink] = useState("");
@@ -91,6 +93,7 @@ export function HeroCard({
       const result = await submitVerification(source, caption, (nextStage) => {
         if (!mountedRef.current) return;
         setStage("analyzing");
+        setCurrentStage(nextStage);
         setStageLabel(STAGE_LABELS[nextStage]);
       });
       if (!mountedRef.current) return;
@@ -117,6 +120,7 @@ export function HeroCard({
     setMode("file");
     setError(null);
     setRevealResult(null);
+    setCurrentStage("queued");
     onResult(null);
   }
 
@@ -253,12 +257,8 @@ export function HeroCard({
               transition={stageTransition}
               className={`flex flex-col items-center justify-center gap-2 ${stage === "uploading" ? "h-40" : ""} ${fill}`}
             >
-              {stage === "analyzing" && preview && (
-                preview.kind === "image" ? (
-                  <img src={preview.url} alt="" className="h-40 w-auto rounded-xl object-contain" />
-                ) : (
-                  <video src={preview.url} className="h-40 w-auto rounded-xl object-cover" muted playsInline autoPlay loop />
-                )
+              {stage === "analyzing" && (
+                <AnalyzingScene preview={preview} stage={currentStage} />
               )}
               {stage === "uploading" && (
                 <div className="h-2 w-2/3 overflow-hidden rounded-full bg-black/10">
