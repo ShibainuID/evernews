@@ -3,7 +3,8 @@
 httpx MockTransport only — no network, no credentials. Pins the exact
 ``claims:search`` request shape (query, pageSize=10, key, optional
 languageCode, pageToken on follow-up pages), 15s timeout, bounded 5xx/429
-retry via ``utils/retry.py`` (max 2 attempts, numeric Retry-After honored),
+retry via ``utils/retry.py`` (max 3 attempts, i.e. two retries, numeric
+Retry-After honored),
 normalization of every claim-review into ``FactCheckEvidence`` (textualRating
 verbatim, raw claim preserved), 3-page pagination cap, review_url dedupe in
 the task runner, and timeout/error propagation (never a fake empty result).
@@ -224,40 +225,48 @@ async def test_pagination_capped_at_three_pages():
 # --- bounded retry via utils/retry.py ---
 
 
-async def test_5xx_retries_once_then_succeeds(monkeypatch):
+async def test_5xx_retries_twice_then_succeeds(monkeypatch):
     sleeps: list[float] = []
     monkeypatch.setattr(asyncio, "sleep", _fake_sleep(sleeps))
-    handler, calls = _scripted([_response(503), _response(200, _page([_claim()]))])
+    handler, calls = _scripted(
+        [_response(503), _response(503), _response(200, _page([_claim()]))]
+    )
 
     result = await search_fact_checks("q", api_key="test-key", transport=_transport(handler))
 
     assert len(result) == 1
-    assert len(calls) == 2  # max 2 attempts
-    assert sleeps == [0.5]  # base_delay * 2**0
+    assert len(calls) == 3  # max 3 attempts: one initial call plus two retries
+    assert sleeps == [0.5, 1.0]  # base_delay * 2**attempt
 
 
-async def test_429_honors_retry_after_within_two_attempts(monkeypatch):
+async def test_429_honors_retry_after_within_three_attempts(monkeypatch):
     sleeps: list[float] = []
     monkeypatch.setattr(asyncio, "sleep", _fake_sleep(sleeps))
-    handler, calls = _scripted([_response(429, retry_after="7"), _response(200, _page([_claim()]))])
+    handler, calls = _scripted(
+        [
+            _response(429, retry_after="7"),
+            _response(429, retry_after="7"),
+            _response(200, _page([_claim()])),
+        ]
+    )
 
     result = await search_fact_checks("q", api_key="test-key", transport=_transport(handler))
 
     assert len(result) == 1
-    assert len(calls) == 2
-    assert sleeps == [7.0]  # Retry-After honored, not the backoff schedule
+    assert len(calls) == 3
+    assert sleeps == [7.0, 7.0]  # Retry-After honored, not the backoff schedule
 
 
 async def test_5xx_exhausted_raises_never_empty(monkeypatch):
     sleeps: list[float] = []
     monkeypatch.setattr(asyncio, "sleep", _fake_sleep(sleeps))
-    handler, calls = _scripted([_response(500), _response(500)])
+    handler, calls = _scripted([_response(500), _response(500), _response(500)])
 
     with pytest.raises(httpx.HTTPStatusError):
         await search_fact_checks("q", api_key="test-key", transport=_transport(handler))
 
-    assert len(calls) == 2  # bounded: never a third attempt
-    assert sleeps == [0.5]
+    assert len(calls) == 3  # bounded: never a fourth attempt
+    assert sleeps == [0.5, 1.0]
 
 
 async def test_non_retryable_4xx_propagates_immediately():

@@ -99,6 +99,15 @@ async def create_verification(
         if video is not None:
             video_path = save_upload(video.file, ver_id, settings)
         elif video_url:
+            if not settings.enable_url_input:
+                # ENABLE_URL_INPUT also gates direct video URLs (design §10)
+                raise HTTPException(
+                    status_code=403,
+                    detail=(
+                        "video_url input is disabled: set ENABLE_URL_INPUT=true "
+                        "to accept direct video URLs"
+                    ),
+                )
             video_path = await save_remote_video(video_url, ver_id, settings)
         else:
             raise HTTPException(

@@ -198,6 +198,58 @@ def test_upload_without_video_or_url_is_400(app):
     assert "video_url" in resp.json()["detail"]
 
 
+def _url_app(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, enable_url_input: str):
+    """App with an explicit ENABLE_URL_INPUT (set before create_app reads Settings)."""
+    monkeypatch.setenv("APP_ENV", "development")
+    monkeypatch.setenv("WORKDIR", str(tmp_path / "work"))
+    monkeypatch.setenv("ENABLE_URL_INPUT", enable_url_input)
+    application = create_app()
+    state_module.store.reset()
+    return application
+
+
+def test_video_url_rejected_clearly_when_url_input_disabled(monkeypatch, tmp_path: Path):
+    from backend.api import verification as verification_api
+
+    async def boom(url: str, ver_id: str, settings=None):  # must never be called
+        raise AssertionError(f"save_remote_video must not run when url input is disabled: {url}")
+
+    monkeypatch.setattr(verification_api, "save_remote_video", boom)
+    app = _url_app(monkeypatch, tmp_path, enable_url_input="false")
+
+    with TestClient(app) as client:
+        resp = client.post(BASE, data={"video_url": "https://example.com/clip.mp4"})
+
+    assert resp.status_code == 403
+    assert "ENABLE_URL_INPUT" in resp.json()["detail"]
+    # never accepted into the store: no fetch, no state entry, no background job
+    assert state_module.store._states == {}
+
+
+def test_video_url_accepted_when_url_input_enabled(monkeypatch, tmp_path: Path, video: Path):
+    from backend.api import verification as verification_api
+
+    seen: dict = {}
+
+    async def fake_save_remote_video(url: str, ver_id: str, settings=None) -> Path:
+        seen["url"] = url
+        seen["ver_id"] = ver_id
+        return video  # real MP4: the background pipeline can complete on it
+
+    monkeypatch.setattr(verification_api, "save_remote_video", fake_save_remote_video)
+    app = _url_app(monkeypatch, tmp_path, enable_url_input="true")
+    _inject(app, _case_a(new_verification_id()))
+
+    with TestClient(app) as client:
+        resp = client.post(BASE, data={"video_url": "https://example.com/clip.mp4"})
+
+    assert resp.status_code == 202
+    assert seen["url"] == "https://example.com/clip.mp4"
+    final = state_module.store.get(seen["ver_id"])
+    assert final is not None
+    assert final.status == "completed"
+
+
 def test_debug_returns_artifacts_and_result_summaries(app, video: Path):
     _inject(app, _case_a(new_verification_id()))
     with TestClient(app) as client:

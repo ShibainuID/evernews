@@ -1,10 +1,11 @@
 """T26: OpenCodeGoLunaProvider tests (TDD red-green).
 
 httpx MockTransport only — no network, no credentials. Pins the exact
-Responses payload shape (HANDOFF §42), Bearer auth, bounded 5xx/429 retry
-via ``utils/retry.py`` (max 2 attempts, numeric Retry-After honored), the
-``output_text`` -> ``output[*].content[*].text`` extraction order, and the
-exactly-one schema-correction request before ``StructuredOutputError``.
+Responses payload shape (HANDOFF §42) with the §28 low temperature, Bearer
+auth, bounded 5xx/429 retry via ``utils/retry.py`` (max 3 attempts, i.e. two
+retries, numeric Retry-After honored), the ``output_text`` ->
+``output[*].content[*].text`` extraction order, and the exactly-one
+schema-correction request before ``StructuredOutputError``.
 """
 
 import asyncio
@@ -85,6 +86,7 @@ async def test_structured_sends_exact_responses_payload_with_bearer_auth():
     assert request.headers["content-type"].startswith("application/json")
     assert json.loads(request.content) == {
         "model": "gpt-5.6-luna",
+        "temperature": 0.1,  # HANDOFF §28: low temperature for structured output
         "input": [{"role": "user", "content": [{"type": "input_text", "text": "describe"}]}],
     }
 
@@ -102,6 +104,7 @@ async def test_image_paths_become_base64_input_image_parts(tmp_path):
     expected_url = "data:image/jpeg;base64," + base64.b64encode(b"fake-jpeg-bytes-123").decode()
     assert json.loads(request.content) == {
         "model": "gpt-5.6-luna",
+        "temperature": 0.1,
         "input": [
             {
                 "role": "user",
@@ -117,6 +120,7 @@ async def test_image_paths_become_base64_input_image_parts(tmp_path):
 def test_build_responses_payload_isolates_request_shape(tmp_path):
     assert build_responses_payload("gpt-5.6-luna", "hi") == {
         "model": "gpt-5.6-luna",
+        "temperature": 0.1,
         "input": [{"role": "user", "content": [{"type": "input_text", "text": "hi"}]}],
     }
 
@@ -178,43 +182,47 @@ async def test_missing_output_text_is_provider_error_with_one_repair():
 # --- bounded retry via utils/retry.py ---
 
 
-async def test_5xx_retries_once_then_succeeds(monkeypatch):
+async def test_5xx_retries_twice_then_succeeds(monkeypatch):
     sleeps: list[float] = []
     monkeypatch.setattr(asyncio, "sleep", _fake_sleep(sleeps))
-    handler, calls = _scripted([_response(503), _response(200, _luna_json("street"))])
+    handler, calls = _scripted(
+        [_response(503), _response(503), _response(200, _luna_json("street"))]
+    )
     provider = _provider(httpx.MockTransport(handler))
 
     result = await provider.structured("describe", VisualObservation)
 
     assert result.scene_type == "street"
-    assert len(calls) == 2  # max 2 attempts
-    assert sleeps == [0.5]  # base_delay * 2**0
+    assert len(calls) == 3  # max 3 attempts: one initial call plus two retries
+    assert sleeps == [0.5, 1.0]  # base_delay * 2**attempt
 
 
-async def test_5xx_exhausts_max_two_attempts_then_raises(monkeypatch):
+async def test_5xx_exhausts_three_attempts_then_raises(monkeypatch):
     sleeps: list[float] = []
     monkeypatch.setattr(asyncio, "sleep", _fake_sleep(sleeps))
-    handler, calls = _scripted([_response(500), _response(500)])
+    handler, calls = _scripted([_response(500), _response(500), _response(500)])
     provider = _provider(httpx.MockTransport(handler))
 
     with pytest.raises(httpx.HTTPStatusError):
         await provider.structured("describe", VisualObservation)
 
-    assert len(calls) == 2  # bounded: never a third attempt
-    assert sleeps == [0.5]
+    assert len(calls) == 3  # bounded: never a fourth attempt
+    assert sleeps == [0.5, 1.0]
 
 
-async def test_429_honors_numeric_retry_after_within_two_attempts(monkeypatch):
+async def test_429_honors_numeric_retry_after_within_three_attempts(monkeypatch):
     sleeps: list[float] = []
     monkeypatch.setattr(asyncio, "sleep", _fake_sleep(sleeps))
-    handler, calls = _scripted([_response(429, retry_after="7"), _response(429, retry_after="7")])
+    handler, calls = _scripted(
+        [_response(429, retry_after="7"), _response(429, retry_after="7"), _response(429, retry_after="7")]
+    )
     provider = _provider(httpx.MockTransport(handler))
 
     with pytest.raises(httpx.HTTPStatusError):
         await provider.structured("describe", VisualObservation)
 
-    assert len(calls) == 2
-    assert sleeps == [7.0]  # Retry-After honored on the single inter-attempt sleep
+    assert len(calls) == 3
+    assert sleeps == [7.0, 7.0]  # Retry-After honored on every inter-attempt sleep
 
 
 async def test_429_recovers_on_retry(monkeypatch):

@@ -6,11 +6,12 @@ Structured VLM calls go to ``POST {base_url}/responses`` with
 (``build_responses_payload``) so a future API shape change (HANDOFF §42) is a
 single localized edit; the ``LunaProvider.structured`` contract is unchanged.
 
-Retries: at most 2 attempts for 5xx/429 via ``utils/retry.py`` (429 honors a
-numeric ``Retry-After``). Response text comes from ``output_text`` with a
-fallback over ``output[*].content[*].text``; missing text is a provider
-error, never a valid empty output. Non-JSON / schema-invalid output triggers
-exactly one schema-correction request, then ``StructuredOutputError``.
+Retries: at most 3 attempts (two retries) for 5xx/429 via ``utils/retry.py``
+(429 honors a numeric ``Retry-After``). Response text comes from
+``output_text`` with a fallback over ``output[*].content[*].text``; missing
+text is a provider error, never a valid empty output. Non-JSON /
+schema-invalid output triggers exactly one schema-correction request, then
+``StructuredOutputError``.
 """
 
 import base64
@@ -27,7 +28,8 @@ from backend.utils.retry import retry_async
 T = TypeVar("T", bound=BaseModel)
 
 _IMAGE_MIME = "image/jpeg"  # keyframes are ffmpeg-extracted JPEGs
-_MAX_ATTEMPTS = 2  # bounded: one initial call plus one retry
+_TEMPERATURE = 0.1  # HANDOFF §28: low temperature for structured output
+_MAX_ATTEMPTS = 3  # bounded: one initial call plus two retries (HANDOFF §27)
 _BASE_DELAY = 0.5
 
 
@@ -52,7 +54,11 @@ def build_responses_payload(
         content.append(
             {"type": "input_image", "image_url": f"data:{_IMAGE_MIME};base64,{encoded}"}
         )
-    return {"model": model, "input": [{"role": "user", "content": content}]}
+    return {
+        "model": model,
+        "temperature": _TEMPERATURE,  # HANDOFF §28: structured-output discipline
+        "input": [{"role": "user", "content": content}],
+    }
 
 
 def _extract_output_text(data: dict[str, Any]) -> str:
