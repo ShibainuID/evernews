@@ -75,4 +75,6 @@ class ContextClaim(BaseModel):
     normalized_value: str | None = None
     confidence: float
     evidence_ids: list[str]
-    explicitly_claimed: bool
+    # Decided locally by the fuser from supporting atom types — the model is
+    # never asked to emit it, so it defaults here for schema-valid LLM output.
+    explicitly_claimed: bool = False

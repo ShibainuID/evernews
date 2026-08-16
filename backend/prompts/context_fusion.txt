@@ -8,12 +8,16 @@ Given:
 
 extract WHAT, WHERE, WHEN as claims the video is making.
 
-For each field:
-- record the claimed value,
-- normalized value where safe,
-- confidence that the VIDEO IS MAKING that claim,
-- evidence IDs that support extraction,
-- whether the claim is explicit or inferred.
+For each of event, location, time, return an object with exactly these fields:
+- value: the claimed value as the video states it (null when unsupported),
+- normalized_value: normalized form where safe, else null,
+- confidence: 0-1, how strongly the video itself makes this claim,
+- evidence_ids: only the evidence IDs listed below.
+
+The top-level object may also include:
+- summary: one sentence describing what the video claims,
+- entities: named entities mentioned,
+- keywords: short search keywords derived from the claims.
 
 Evidence items (cite only these IDs):
 {evidence}
