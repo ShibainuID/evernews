@@ -272,6 +272,37 @@ def test_old_footage_reused_requires_selected_source_context():
     assert "old_footage_reused" not in result.manipulation_types
 
 
+def test_ai_generated_media_claimed_only_from_evidence_text():
+    golden = case_a()
+    result = build(
+        golden.video_context,
+        _synthesis(
+            verification_id="ver_a",
+            synthesis_summary=(
+                "The circulating video is assessed by a government fact check "
+                "as 99% AI-generated, so the claim is contradicted."
+            ),
+        ),
+        golden.expected_comparison,
+        [],
+    )
+    assert "ai_generated_media" in result.manipulation_types
+
+
+def test_ai_generated_never_guessed_from_bare_ai_word():
+    golden = case_a()
+    result = build(
+        golden.video_context,
+        _synthesis(
+            verification_id="ver_a",
+            synthesis_summary="An AI-powered news agency covered the event; no fabrication reported.",
+        ),
+        golden.expected_comparison,
+        [],
+    )
+    assert "ai_generated_media" not in result.manipulation_types
+
+
 # --- wording guard (§15.2/§43) ---
 
 

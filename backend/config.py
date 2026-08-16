@@ -44,6 +44,9 @@ class Settings(BaseSettings):
     google_cloud_project: str = ""
     google_application_credentials: str = "/path/to/service-account.json"
 
+    # SerpAPI Google Lens (vision fallback; API key only, no billing account)
+    serpapi_api_key: str = ""
+
     # Feature flags (all default false)
     enable_url_input: bool = False
     enable_factcheck_image_search: bool = False
