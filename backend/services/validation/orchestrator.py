@@ -27,7 +27,7 @@ with no caching at all, preserving the pre-cache behavior byte for byte.
 
 import asyncio
 import time
-from typing import Any, Awaitable, Callable, Sequence, cast
+from typing import Any, Awaitable, Callable, Literal, Sequence, cast
 
 from backend.schemas.context import VideoContext
 from backend.schemas.evidence import KeyframeRef
@@ -254,17 +254,42 @@ def _web_normalize(
     return results, status, errors
 
 
+CandidateType = Literal[
+    "full_image_match", "partial_image_match", "page_match", "visually_similar"
+]
+
+# Schema-literal candidate_type -> strength (same ordering as vision_search's
+# dedupe and the normalizer's high/medium/low tiers): the strongest demo tier
+# present in SourceCandidate.match_types must survive the boundary.
+_DEMO_TYPE_STRENGTH: dict[CandidateType, int] = {
+    "full_image_match": 3,
+    "partial_image_match": 2,
+    "page_match": 1,
+    "visually_similar": 0,
+}
+
+
 def _demo_candidate(candidate: SourceCandidate, context: VideoContext) -> VisualWebCandidate:
-    """Adapt a ``SourceCandidate`` at the boundary; origin survives in raw_provider_type."""
+    """Adapt a ``SourceCandidate`` at the boundary; origin survives in raw_provider_type.
+
+    The demo index tiers (full/partial/visually_similar) live in
+    ``candidate.match_types`` — keep the strongest recognized one as
+    ``candidate_type``, falling back to ``visually_similar`` when none is
+    present, so downstream strength labels (normalizer/ranker) stay honest.
+    """
     frame_id = (
         candidate.matched_frame_ids[0]
         if candidate.matched_frame_ids
         else (context.keyframes[0].frame_id if context.keyframes else "unknown")
     )
+    candidate_type: CandidateType = "visually_similar"
+    for match_type, strength in _DEMO_TYPE_STRENGTH.items():
+        if match_type in candidate.match_types and strength > _DEMO_TYPE_STRENGTH[candidate_type]:
+            candidate_type = match_type
     return VisualWebCandidate(
         candidate_id=candidate.source_id,
         frame_id=frame_id,
-        candidate_type="visually_similar",
+        candidate_type=candidate_type,
         url=candidate.url,
         page_url=candidate.url,
         page_title=candidate.title,

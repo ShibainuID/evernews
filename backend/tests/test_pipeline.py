@@ -803,7 +803,16 @@ async def test_investigator_timeout_marks_web_branch_incomplete(settings: Any, v
     assert_evidence_invariants(result)
 
 
-async def test_empty_vision_with_demo_index_yields_demo_candidate(settings: Any, video: Path):
+@pytest.mark.parametrize(
+    ("match_types", "strength_marker"),
+    [
+        (["visually_similar", "hash:average_hamming"], None),  # weak tier stays weak
+        (["full_image_match", "hash:average_hamming", "hash_distance:2"], "high"),
+    ],
+)
+async def test_empty_vision_with_demo_index_yields_demo_candidate(
+    match_types: list[str], strength_marker: str | None, settings: Any, video: Path
+):
     ver_id = new_verification_id()
     providers = _case_a(ver_id)
     providers.vision = FakeVisionProvider([[]])  # provider healthy, zero matches
@@ -822,7 +831,7 @@ async def test_empty_vision_with_demo_index_yields_demo_candidate(settings: Any,
                     location="Bangkok",
                     time_context="2022-10-03",
                     matched_frame_ids=[f"{ver_id}_kf000"],
-                    match_types=["visually_similar", "hash:average_hamming"],
+                    match_types=match_types,
                     earliest_known_date="2022-10-03",
                     origin="demo_index",
                 )
@@ -838,6 +847,8 @@ async def test_empty_vision_with_demo_index_yields_demo_candidate(settings: Any,
     demo = [source for source in result.sources if source.url == demo_url]
     assert demo, "demo candidate must enter the result when vision is empty"
     assert any("demo_index" in match_type for match_type in demo[0].match_types)
+    if strength_marker is not None:
+        assert strength_marker in demo[0].match_types  # D1: match strength survives normalization
     assert_evidence_invariants(result)
 
 

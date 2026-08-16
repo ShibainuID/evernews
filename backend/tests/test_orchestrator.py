@@ -392,6 +392,37 @@ async def test_visual_empty_triggers_demo_fallback():
     assert demo.frames_calls == [["/tmp/kf_01.png", "/tmp/kf_02.png"]]
 
 
+async def test_demo_fallback_preserves_strongest_match_type():
+    demo = ScriptedDemoIndex(
+        [
+            [
+                _demo_source("demo_weak"),  # weak tier: stays visually_similar
+                SourceCandidate(
+                    source_id="demo_full",
+                    url="https://demo.example/demo_full",
+                    canonical_url="https://demo.example/demo_full",
+                    matched_frame_ids=["kf_01"],
+                    match_types=["full_image_match", "hash:average_hamming", "hash_distance:2"],
+                    origin="demo_index",
+                ),
+            ]
+        ]
+    )
+    bundle = await execute(
+        _context(),
+        _plan(),
+        run_fact_check=ScriptedFactRunner([[_fact_evidence()]]),
+        investigate=ScriptedWebRunner([_web_result("web_00")]),
+        run_visual=ScriptedVisualRunner([[]]),
+        demo_index=demo.search,
+    )
+
+    by_id = {c.candidate_id: c for c in bundle.visual_candidates}
+    assert by_id["demo_weak"].candidate_type == "visually_similar"  # weak stays weak
+    assert by_id["demo_full"].candidate_type == "full_image_match"  # D1: strong survives
+    assert by_id["demo_full"].raw_provider_type == "demo_index"
+
+
 async def test_visual_zero_match_without_demo_candidates_is_valid_no_match():
     bundle, *_ = await _execute(
         _context(),
