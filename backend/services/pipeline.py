@@ -46,6 +46,7 @@ from backend.schemas.investigation import RawValidationBundle, VisualSearchTask,
 from backend.schemas.result import VerificationResult
 from backend.services.context import context_fuser, visual_extractor
 from backend.services.evidence import comparator, normalizer, source_ranker, synthesizer
+from backend.services.ingestion.video_ingestor import is_image_file
 from backend.services.preprocessing import ffmpeg, frame_sampler, keyframes
 from backend.services.result import result_builder
 from backend.services.validation import orchestrator, planner
@@ -266,8 +267,20 @@ async def run_verification(
             # ----- Part 1: preprocessing (T19) + keyframes (T20) -----
             _enter(ver_id, "preprocessing")
             _t0 = time.perf_counter()
-            artifacts = ffmpeg.preprocess(ver_id, request.video_path, settings)
-            keyframe_refs = keyframes.select_keyframes(artifacts.normalized_path, ver_id, settings)
+            # Images skip ffmpeg entirely: the image itself is the only keyframe.
+            is_image = is_image_file(request.video_path)
+            if is_image:
+                keyframe_refs = [
+                    KeyframeRef(
+                        frame_id=f"{ver_id}_kf000",
+                        timestamp_sec=0.0,
+                        local_path=str(request.video_path),
+                        selection_reason="single_image_upload",
+                    )
+                ]
+            else:
+                artifacts = ffmpeg.preprocess(ver_id, request.video_path, settings)
+                keyframe_refs = keyframes.select_keyframes(artifacts.normalized_path, ver_id, settings)
             log_event(
                 ver_id,
                 "preprocessing",
@@ -275,33 +288,41 @@ async def run_verification(
                 _elapsed_ms(_t0),
                 "success",
                 keyframes=len(keyframe_refs),
+                media="image" if is_image else "video",
             )
 
             # ----- context extraction (T24/T25/T22/T23): heavy providers isolated -----
             _enter(ver_id, "extracting_context")
-            try:
-                _t0 = time.perf_counter()
-                speech = await _extract_speech(providers, str(artifacts.audio_path))
-                log_event(
-                    ver_id,
-                    "extracting_context",
-                    "speech",
-                    _elapsed_ms(_t0),
-                    "success",
-                    segments=len(speech.segments),
-                )
-            except Exception as exc:
-                speech = SpeechExtraction()  # §26: whisper failure -> empty speech, continue
-                unresolved_notes.append(f"speech extraction failed: {exc}")
-                log_event(
-                    ver_id, "extracting_context", "speech", _elapsed_ms(_t0), "error", degraded=True
-                )
+            if is_image:
+                # images have no audio track: empty speech, not an error (§26)
+                speech = SpeechExtraction()
+            else:
+                try:
+                    _t0 = time.perf_counter()
+                    speech = await _extract_speech(providers, str(artifacts.audio_path))
+                    log_event(
+                        ver_id,
+                        "extracting_context",
+                        "speech",
+                        _elapsed_ms(_t0),
+                        "success",
+                        segments=len(speech.segments),
+                    )
+                except Exception as exc:
+                    speech = SpeechExtraction()  # §26: whisper failure -> empty speech, continue
+                    unresolved_notes.append(f"speech extraction failed: {exc}")
+                    log_event(
+                        ver_id, "extracting_context", "speech", _elapsed_ms(_t0), "error", degraded=True
+                    )
             try:
                 _t0 = time.perf_counter()
                 # §4.4: OCR uses its own ~1 fps sampled set, never the visual
                 # keyframes — overlay text changes while scenes stay static.
-                ocr_refs = frame_sampler.ocr_frame_refs(
-                    artifacts.normalized_path, ver_id, settings
+                # For an image the set is the image itself at t=0.
+                ocr_refs = (
+                    [OCRFrameRef(local_path=str(request.video_path), timestamp_sec=0.0)]
+                    if is_image
+                    else frame_sampler.ocr_frame_refs(artifacts.normalized_path, ver_id, settings)
                 )
                 ocr = await _extract_ocr(providers, ocr_refs)
                 log_event(

@@ -158,6 +158,44 @@ def test_save_upload_accepts_video_without_audio(settings, tmp_path):
     assert saved.exists() and saved.stat().st_size > 0
 
 
+def test_save_upload_accepts_jpeg_image_without_ffprobe(settings):
+    payload = b"\xff\xd8\xff\xe0\x00\x10JFIF" + b"\x00" * 128
+    ver_id = new_verification_id()
+
+    saved = save_upload(FakeUpload(payload), ver_id, settings=settings)
+
+    assert saved.name == "original.jpg"
+    assert saved.parent.name == ver_id
+    assert saved.read_bytes() == payload
+
+
+def test_save_upload_accepts_png_image_without_ffprobe(settings):
+    payload = b"\x89PNG\r\n\x1a\n" + b"\x00" * 128
+
+    saved = save_upload(FakeUpload(payload), new_verification_id(), settings=settings)
+
+    assert saved.name == "original.png"
+    assert saved.exists() and saved.stat().st_size > 0
+
+
+def test_save_upload_accepts_webp_image(settings):
+    payload = b"RIFF\x00\x00\x00\x00WEBPVP8 " + b"\x00" * 128
+
+    saved = save_upload(FakeUpload(payload), new_verification_id(), settings=settings)
+
+    assert saved.name == "original.webp"
+    assert saved.exists()
+
+
+def test_save_upload_rejects_text_not_matching_image_or_video_magic(settings):
+    ver_id = new_verification_id()
+
+    with pytest.raises(InvalidVideoError):
+        save_upload(FakeUpload(b"just some plain text here"), ver_id, settings=settings)
+
+    assert not (Path(settings.workdir) / ver_id).exists()
+
+
 async def _fake_fetch(result):
     async def fetcher(url, *, timeout, max_bytes):
         return result

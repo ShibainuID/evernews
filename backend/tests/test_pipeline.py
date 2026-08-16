@@ -851,6 +851,32 @@ async def test_investigator_timeout_marks_web_branch_incomplete(settings: Any, v
     assert_evidence_invariants(result)
 
 
+async def test_image_upload_runs_without_ffmpeg_and_single_keyframe(settings: Any, tmp_path: Path):
+    """Images skip ffmpeg/audio entirely: one keyframe = the image itself,
+    empty speech, OCR gets exactly the image as its frame set."""
+    ver_id = new_verification_id()
+    image = tmp_path / "photo.jpg"
+    image.write_bytes(b"\xff\xd8\xff\xe0\x00\x10JFIF" + b"\x00" * 128)
+    providers = _case_a(ver_id)
+    recording = _RecordingOcr()
+    providers.ocr = recording
+
+    result = await pipeline.run_verification(
+        ver_id, pipeline.VerificationRequest(video_path=image), providers, settings=settings
+    )
+
+    assert isinstance(result, VerificationResult)
+    assert result.current_context.transcript == ""  # images have no audio
+    assert len(result.current_context.keyframes) == 1
+    keyframe = result.current_context.keyframes[0]
+    assert Path(keyframe.local_path) == image
+    assert keyframe.selection_reason == "single_image_upload"
+    assert recording.calls and recording.calls[-1] == [
+        OCRFrameRef(local_path=str(image), timestamp_sec=0.0)
+    ]
+    assert_evidence_invariants(result)
+
+
 @pytest.mark.parametrize(
     ("match_types", "strength_marker"),
     [

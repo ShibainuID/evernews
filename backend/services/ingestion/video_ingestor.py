@@ -50,6 +50,36 @@ class MediaProbeUnavailableError(IngestionError):
     """ffprobe is not installed; validation cannot run — fail closed."""
 
 
+_JPEG_MAGIC = b"\xff\xd8\xff"
+_PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+_WEBP_MAGIC = b"RIFF"
+_IMAGE_EXTENSIONS = {".jpg": _JPEG_MAGIC, ".png": _PNG_MAGIC, ".webp": _WEBP_MAGIC}
+
+
+def detect_media_kind(header: bytes) -> str:
+    """Classify the first bytes of a media file: ``video``, ``image``, or ``unknown``.
+
+    Images (JPEG/PNG/WebP) are accepted alongside MP4; anything else — text,
+    archives, audio-only containers — is ``unknown`` and rejected.
+    """
+    if header[:3] == _JPEG_MAGIC:
+        return "image"
+    if header[:8] == _PNG_MAGIC:
+        return "image"
+    if header[:4] == _WEBP_MAGIC and header[8:12] == b"WEBP":
+        return "image"
+    if len(header) >= 12 and header[4:8] == b"ftyp":
+        return "video"
+    return "unknown"
+
+
+def is_image_file(path: Path | str) -> bool:
+    """True when ``path`` begins with a supported image magic (never decodes)."""
+    with open(path, "rb") as handle:
+        header = handle.read(16)
+    return detect_media_kind(header) == "image"
+
+
 def new_verification_id() -> str:
     """Return a fresh generated identifier: ``ver_<uuid4 hex>``."""
     return f"ver_{uuid.uuid4().hex}"
@@ -133,9 +163,21 @@ def save_upload(file, ver_id: str, settings: Settings | None = None) -> Path:
                     )
                 out.write(chunk)
 
-        # Container magic: MP4 starts with a 4-byte big-endian size + "ftyp".
-        # Read exactly the 12-byte header; never load the whole file.
-        _validate_video(dest, settings)
+        # Container magic: MP4 starts with a 4-byte big-endian size + "ftyp",
+        # images carry their own magic (JPEG/PNG/WebP). Read exactly 16 bytes;
+        # never load the whole file.
+        with dest.open("rb") as handle:
+            header = handle.read(16)
+        kind = detect_media_kind(header)
+        if kind == "image":
+            ext = next(ext for ext, magic in _IMAGE_EXTENSIONS.items() if header[: len(magic)] == magic)
+            dest = dest.rename(dest_dir / f"original{ext}")
+        elif kind == "video":
+            _validate_video(dest, settings)
+        else:
+            raise InvalidVideoError(
+                "upload is not an MP4 video or a supported image (JPEG/PNG/WebP)"
+            )
     except Exception:
         shutil.rmtree(dest_dir, ignore_errors=True)  # ponytail: best-effort cleanup
         raise

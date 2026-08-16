@@ -191,6 +191,22 @@ def test_video_too_long_rejected_before_background(app, tmp_path: Path):
     assert state_module.store._states == {}
 
 
+def test_image_upload_returns_202_and_completes(app, tmp_path: Path):
+    _inject(app, _case_a(new_verification_id()))
+    image = tmp_path / "photo.jpg"
+    image.write_bytes(b"\xff\xd8\xff\xe0\x00\x10JFIF" + b"\x00" * 128)
+
+    with TestClient(app) as client:
+        with image.open("rb") as f:
+            resp = client.post(BASE, files={"video": ("photo.jpg", f, "image/jpeg")})
+
+    assert resp.status_code == 202
+    final = state_module.store.get(resp.json()["verification_id"])
+    assert final is not None
+    assert final.status == "completed"
+    assert final.result is not None
+
+
 def test_upload_without_video_or_url_is_400(app):
     with TestClient(app) as client:
         resp = client.post(BASE, data={"caption": "no video here"})
