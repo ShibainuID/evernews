@@ -30,15 +30,16 @@ from backend.utils.fetch import SafeFetchResult
 class RecordingFetcher:
     """Injected fetcher boundary: records URLs, never touches the network."""
 
-    def __init__(self, *, fail: bool = False):
+    def __init__(self, *, fail: bool = False, body: bytes = b"<html>ok</html>"):
         self.calls: list[str] = []
         self._fail = fail
+        self._body = body
 
     async def __call__(self, url: str) -> SafeFetchResult:
         self.calls.append(url)
         if self._fail:
             raise RuntimeError("network down")
-        return SafeFetchResult(url=url, status=200, body=b"<html>ok</html>", truncated=False)
+        return SafeFetchResult(url=url, status=200, body=self._body, truncated=False)
 
 
 def make_context(verification_id: str = "ver_t13"):
@@ -422,6 +423,157 @@ async def test_fetch_failure_does_not_abort_normalization():
 
     assert {c.origin for c in candidates} == {"fact_check", "web"}
     assert "page_match" in candidates[1].match_types
+
+
+# --- page metadata enrichment (HANDOFF 13.3) -------------------------------
+
+
+def _page_match_bundle(page_title: str | None = None, **candidate_overrides: Any):
+    return build_bundle(
+        "ver_t13",
+        visual_candidates=[
+            build_visual_candidate(
+                "vis_01",
+                "kf_01",
+                candidate_type="page_match",
+                url="https://example.com/article",
+                page_title=page_title,
+                **candidate_overrides,
+            )
+        ],
+    )
+
+
+async def test_page_match_parses_open_graph_metadata_into_candidate():
+    html = b"""
+    <html><head>
+      <meta property="og:title" content="Jakarta Banjir 2026">
+      <meta property="og:site_name" content="Tempo">
+      <meta property="article:published_time" content="2026-02-03T09:30:00+07:00">
+      <meta property="og:description" content="Heavy rain flooded Jakarta streets.">
+    </head><body><p>article body</p></body></html>
+    """
+    bundle = _page_match_bundle(page_title="Snippet title")
+    candidates = await build_source_candidates(
+        make_context(), bundle, RecordingFetcher(body=html)
+    )
+
+    assert len(candidates) == 1
+    candidate = candidates[0]
+    # deterministic parse wins over the agent-provided page_title
+    assert candidate.title == "Jakarta Banjir 2026"
+    assert candidate.publisher == "Tempo"
+    assert candidate.published_at == "2026-02-03"  # ISO datetime reduced to date
+    assert candidate.description == "Heavy rain flooded Jakarta streets."
+    assert candidate.earliest_known_date == "2026-02-03"
+    assert candidate.evidence_ids == ["vis_01"]
+
+
+async def test_page_match_parses_jsonld_news_article_metadata():
+    html = b"""
+    <html><head>
+      <script type="application/ld+json">
+      {"@context": "https://schema.org", "@type": "NewsArticle",
+       "headline": "Flooding in Bangkok",
+       "datePublished": "2022-10-03T14:30:00+07:00",
+       "description": "Heavy rain flooded Bangkok streets.",
+       "publisher": {"@type": "Organization", "name": "Example News"},
+       "locationCreated": {"@type": "Place", "name": "Bangkok"}}
+      </script>
+    </head><body></body></html>
+    """
+    candidates = await build_source_candidates(
+        make_context(), _page_match_bundle(), RecordingFetcher(body=html)
+    )
+
+    candidate = candidates[0]
+    assert candidate.title == "Flooding in Bangkok"
+    assert candidate.publisher == "Example News"
+    assert candidate.published_at == "2022-10-03"
+    assert candidate.description == "Heavy rain flooded Bangkok streets."
+    assert candidate.location == "Bangkok"
+
+
+async def test_page_match_parses_jsonld_event_metadata():
+    html = b"""
+    <script type="application/ld+json">
+    {"@type": "Event", "name": "Flood in Jakarta",
+     "startDate": "2026-02-03T09:00:00Z",
+     "location": {"@type": "Place", "name": "Jakarta"}}
+    </script>
+    """
+    candidates = await build_source_candidates(
+        make_context(), _page_match_bundle(), RecordingFetcher(body=html)
+    )
+
+    candidate = candidates[0]
+    assert candidate.event == "Flood in Jakarta"
+    assert candidate.time_context == "2026-02-03"
+    assert candidate.location == "Jakarta"
+
+
+async def test_page_match_time_element_datetime_is_published_fallback():
+    html = b"""
+    <html><body><article>
+      <h1>Flooding in Bangkok</h1>
+      <time datetime="2022-10-03">3 Oktober 2022</time>
+    </article></body></html>
+    """
+    bundle = _page_match_bundle(page_title="Snippet title")
+    candidates = await build_source_candidates(
+        make_context(), bundle, RecordingFetcher(body=html)
+    )
+
+    candidate = candidates[0]
+    assert candidate.published_at == "2022-10-03"
+    assert candidate.earliest_known_date == "2022-10-03"
+    # no structured title on the page -> agent page_title still used
+    assert candidate.title == "Snippet title"
+
+
+async def test_malformed_html_invents_no_metadata_and_keeps_candidate():
+    html = b"<html><head><meta property='og:title' content=''><body><p>The flood in Jakarta"
+    candidates = await build_source_candidates(
+        make_context(),
+        _page_match_bundle(page_title="Snippet title"),
+        RecordingFetcher(body=html),
+    )
+
+    candidate = candidates[0]
+    assert candidate.title == "Snippet title"
+    assert candidate.published_at is None
+    assert candidate.event is None
+    assert candidate.location is None
+    assert candidate.time_context is None
+    assert candidate.match_types[0] == "page_match"  # candidate not aborted
+
+
+async def test_malformed_jsonld_is_skipped_and_og_still_parsed():
+    html = b"""
+    <html><head>
+      <meta property="og:title" content="Title from OG">
+      <script type="application/ld+json">{broken json</script>
+    </head><body></body></html>
+    """
+    candidates = await build_source_candidates(
+        make_context(), _page_match_bundle(), RecordingFetcher(body=html)
+    )
+
+    assert candidates[0].title == "Title from OG"
+
+
+async def test_fetch_failure_keeps_candidate_with_agent_fields():
+    candidates = await build_source_candidates(
+        make_context(),
+        _page_match_bundle(page_title="Snippet title"),
+        RecordingFetcher(fail=True),
+    )
+
+    candidate = candidates[0]
+    assert candidate.title == "Snippet title"
+    assert candidate.published_at is None
+    assert candidate.evidence_ids == ["vis_01"]
+    assert "page_match" in candidate.match_types
 
 
 # --- visual match_types ---------------------------------------------------
